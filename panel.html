@@ -347,7 +347,7 @@
 </head>
 <body>
 
-<h1>⚡ 0916_공도7 제어반 시뮬레이터 <span style="font-size:11px;color:var(--muted);font-weight:400;">v0.2.0</span></h1>
+<h1>⚡ 0916_공도7 제어반 시뮬레이터 <span style="font-size:11px;color:var(--muted);font-weight:400;">v0.2.1</span></h1>
 <div class="sub">전기기능사 실기 대비 · PB0/PB1/PB2 · SS·FLS·LS1·LS2·EOCR</div>
 
 <div class="board">
@@ -405,8 +405,9 @@
 </div>
 
 <details class="status" style="max-width:640px;margin:14px auto 0;">
-  <summary>📋 변경 이력 (v0.2.0)</summary>
+  <summary>📋 변경 이력 (v0.2.1)</summary>
   <div style="font-size:12px;line-height:1.7;margin-top:8px;">
+    <b>v0.2.1</b> — 셀렉터 스위치 5개에 딸깍 소리, MC1·MC2에 전자접촉기 철컥 소리 추가<br>
     <b>v0.2.0</b> — 디자인 전면 개편: 실제 산업용 제어반 느낌(브러시드 메탈 외장, 코너 리벳, 크롬 스위치, 3D 눌림 버튼, 유리 렌즈 램프)으로 변경<br>
     <b>v0.1.9</b> — 패널 내장 시퀀스 섹션을 제거하고, 별도 페이지로 연결하는 링크 버튼으로 교체<br>
     <b>v0.1.8</b> — 실제 도면 사진(2~11,14,15번) 대조하여 동작 시퀀스 문서 업데이트 (MC1·MC2 상호 인터록 반영)<br>
@@ -564,14 +565,68 @@ const ui = { ss:false, fls:false, ls1:false, ls2:false, eocr:false,
 
 let soundOn = true;
 let audioCtx = null;
+function ensureAudio(){
+  if(!audioCtx){ try{ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+}
 function beep(){
   if(!soundOn) return;
+  ensureAudio();
   try{
-    if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
     const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
     o.frequency.value = 880; o.connect(g); g.connect(audioCtx.destination);
     g.gain.setValueAtTime(0.06, audioCtx.currentTime);
     o.start(); o.stop(audioCtx.currentTime+0.09);
+  }catch(e){}
+}
+// 로터리 셀렉터 스위치를 돌릴 때 나는 "딸깍" 소리
+function playSwitchClick(){
+  if(!soundOn) return;
+  ensureAudio();
+  if(!audioCtx) return;
+  try{
+    const t = audioCtx.currentTime;
+    const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+    o.type = 'square';
+    o.frequency.setValueAtTime(2200, t);
+    o.frequency.exponentialRampToValueAtTime(900, t+0.02);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.18, t+0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+0.03);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(t); o.stop(t+0.04);
+  }catch(e){}
+}
+// 짧은 노이즈 버스트 (기계식 접촉 잡음용)
+function playNoiseBurst(duration, gainPeak){
+  try{
+    const bufferSize = Math.floor(audioCtx.sampleRate*duration);
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for(let i=0;i<bufferSize;i++){ data[i] = (Math.random()*2-1) * (1 - i/bufferSize); }
+    const noise = audioCtx.createBufferSource();
+    noise.buffer = buffer;
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(gainPeak, audioCtx.currentTime);
+    noise.connect(g); g.connect(audioCtx.destination);
+    noise.start();
+  }catch(e){}
+}
+// 전자접촉기(MC1/MC2)가 붙거나 떨어질 때 나는 "철컥" 소리
+function playContactorClack(){
+  if(!soundOn) return;
+  ensureAudio();
+  if(!audioCtx) return;
+  try{
+    const t = audioCtx.currentTime;
+    const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(150, t);
+    o.frequency.exponentialRampToValueAtTime(55, t+0.09);
+    g.gain.setValueAtTime(0.28, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+0.13);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(t); o.stop(t+0.14);
+    playNoiseBurst(0.025, 0.22);
   }catch(e){}
 }
 
@@ -593,7 +648,7 @@ switches.forEach(sw=>{
     <div class="switch-label">${sw.label}</div>
     <div class="switch-state">${sw.desc} · <span class="st-txt">${sw.off}</span></div>
   `;
-  unit.addEventListener('click', ()=>{ ui[sw.id] = !ui[sw.id]; });
+  unit.addEventListener('click', ()=>{ ui[sw.id] = !ui[sw.id]; playSwitchClick(); });
   switchBlock.appendChild(unit);
 });
 
@@ -692,6 +747,7 @@ document.getElementById('resetBtn').addEventListener('click', ()=>{
 // Simulation loop — 100ms = PLC 타이머 1스캔 단위(0.1s)
 // ============================================================
 let prevBz=false;
+let prevMc1=false, prevMc2=false;
 function currentDiagramNumber(){
   let n = 0;
   if(ui.d1) n+=1; if(ui.d2) n+=2; if(ui.d4) n+=4; if(ui.d8) n+=8; if(ui.d16) n+=16;
@@ -723,6 +779,9 @@ function render(){
   });
 
   const mc1 = plc.get('P00022'), mc2 = plc.get('P00023');
+  if(mc1 !== prevMc1) playContactorClack();
+  if(mc2 !== prevMc2) playContactorClack();
+  prevMc1 = mc1; prevMc2 = mc2;
   const lampVal = {
     rl: mc1, gl: mc2,
     yl: plc.get('P00020'),
