@@ -347,7 +347,7 @@
 </head>
 <body>
 
-<h1>⚡ 0916_공도7 제어반 시뮬레이터 <span style="font-size:11px;color:var(--muted);font-weight:400;">v0.2.1</span></h1>
+<h1>⚡ 0916_공도7 제어반 시뮬레이터 <span style="font-size:11px;color:var(--muted);font-weight:400;">v0.2.3</span></h1>
 <div class="sub">전기기능사 실기 대비 · PB0/PB1/PB2 · SS·FLS·LS1·LS2·EOCR</div>
 
 <div class="board">
@@ -405,8 +405,10 @@
 </div>
 
 <details class="status" style="max-width:640px;margin:14px auto 0;">
-  <summary>📋 변경 이력 (v0.2.1)</summary>
+  <summary>📋 변경 이력 (v0.2.3)</summary>
   <div style="font-size:12px;line-height:1.7;margin-top:8px;">
+    <b>v0.2.3</b> — 모든 효과음을 필터링된 노이즈 기반으로 재설계 (사인/사각파 삑삑거림 → 자연스러운 클릭·철컥·통 소리)<br>
+    <b>v0.2.2</b> — PB0·PB1·PB2 버튼 눌림 소리, 도면 선택 칩 클릭 소리 추가<br>
     <b>v0.2.1</b> — 셀렉터 스위치 5개에 딸깍 소리, MC1·MC2에 전자접촉기 철컥 소리 추가<br>
     <b>v0.2.0</b> — 디자인 전면 개편: 실제 산업용 제어반 느낌(브러시드 메탈 외장, 코너 리벳, 크롬 스위치, 3D 눌림 버튼, 유리 렌즈 램프)으로 변경<br>
     <b>v0.1.9</b> — 패널 내장 시퀀스 섹션을 제거하고, 별도 페이지로 연결하는 링크 버튼으로 교체<br>
@@ -568,66 +570,101 @@ let audioCtx = null;
 function ensureAudio(){
   if(!audioCtx){ try{ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
 }
-function beep(){
+let buzzerNodes = null;
+function startBuzzer(){
   if(!soundOn) return;
   ensureAudio();
+  if(!audioCtx || buzzerNodes) return;
   try{
-    const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
-    o.frequency.value = 880; o.connect(g); g.connect(audioCtx.destination);
-    g.gain.setValueAtTime(0.06, audioCtx.currentTime);
-    o.start(); o.stop(audioCtx.currentTime+0.09);
+    const t = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const filt = audioCtx.createBiquadFilter();
+    const g = audioCtx.createGain();
+    const lfo = audioCtx.createOscillator();
+    const lfoGain = audioCtx.createGain();
+    o.type = 'sawtooth'; o.frequency.value = 740;
+    filt.type = 'lowpass'; filt.frequency.value = 1400; filt.Q.value = 0.7;
+    lfo.type = 'square'; lfo.frequency.value = 110; // 부저 특유의 "지지직"거리는 버즈감
+    lfoGain.gain.value = 0.035;
+    lfo.connect(lfoGain); lfoGain.connect(g.gain);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.09, t+0.02);
+    o.connect(filt); filt.connect(g); g.connect(audioCtx.destination);
+    o.start(t); lfo.start(t);
+    buzzerNodes = {o, g, lfo};
   }catch(e){}
 }
-// 로터리 셀렉터 스위치를 돌릴 때 나는 "딸깍" 소리
-function playSwitchClick(){
-  if(!soundOn) return;
+function stopBuzzer(){
+  if(!buzzerNodes) return;
+  try{
+    const {o, g, lfo} = buzzerNodes;
+    const t = audioCtx.currentTime;
+    g.gain.cancelScheduledValues(t);
+    g.gain.setValueAtTime(g.gain.value, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+0.04);
+    o.stop(t+0.06); lfo.stop(t+0.06);
+  }catch(e){}
+  buzzerNodes = null;
+}
+// 짧은 필터링 노이즈 클릭 (기계식 접점/버튼/스위치 소리의 재료)
+function playNoiseClick({freq=3000, q=1.2, type='bandpass', duration=0.02, gain=0.3, attack=0.0008}={}){
   ensureAudio();
   if(!audioCtx) return;
   try{
     const t = audioCtx.currentTime;
-    const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
-    o.type = 'square';
-    o.frequency.setValueAtTime(2200, t);
-    o.frequency.exponentialRampToValueAtTime(900, t+0.02);
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.18, t+0.002);
-    g.gain.exponentialRampToValueAtTime(0.0001, t+0.03);
-    o.connect(g); g.connect(audioCtx.destination);
-    o.start(t); o.stop(t+0.04);
-  }catch(e){}
-}
-// 짧은 노이즈 버스트 (기계식 접촉 잡음용)
-function playNoiseBurst(duration, gainPeak){
-  try{
-    const bufferSize = Math.floor(audioCtx.sampleRate*duration);
+    const bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate*duration));
     const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
     const data = buffer.getChannelData(0);
-    for(let i=0;i<bufferSize;i++){ data[i] = (Math.random()*2-1) * (1 - i/bufferSize); }
-    const noise = audioCtx.createBufferSource();
-    noise.buffer = buffer;
+    for(let i=0;i<bufferSize;i++){ data[i] = Math.random()*2-1; }
+    const src = audioCtx.createBufferSource(); src.buffer = buffer;
+    const filt = audioCtx.createBiquadFilter();
+    filt.type = type; filt.frequency.value = freq; filt.Q.value = q;
     const g = audioCtx.createGain();
-    g.gain.setValueAtTime(gainPeak, audioCtx.currentTime);
-    noise.connect(g); g.connect(audioCtx.destination);
-    noise.start();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t+attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+duration);
+    src.connect(filt); filt.connect(g); g.connect(audioCtx.destination);
+    src.start(t);
   }catch(e){}
 }
-// 전자접촉기(MC1/MC2)가 붙거나 떨어질 때 나는 "철컥" 소리
-function playContactorClack(){
-  if(!soundOn) return;
+// 낮은 "퉁" 하는 기계적 질량감 (버튼/접촉기용)
+function playThump({freq=120, toFreq=55, duration=0.09, gain=0.25}={}){
   ensureAudio();
   if(!audioCtx) return;
   try{
     const t = audioCtx.currentTime;
     const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
     o.type = 'sine';
-    o.frequency.setValueAtTime(150, t);
-    o.frequency.exponentialRampToValueAtTime(55, t+0.09);
-    g.gain.setValueAtTime(0.28, t);
-    g.gain.exponentialRampToValueAtTime(0.0001, t+0.13);
+    o.frequency.setValueAtTime(freq, t);
+    o.frequency.exponentialRampToValueAtTime(toFreq, t+duration);
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+duration);
     o.connect(g); g.connect(audioCtx.destination);
-    o.start(t); o.stop(t+0.14);
-    playNoiseBurst(0.025, 0.22);
+    o.start(t); o.stop(t+duration+0.02);
   }catch(e){}
+}
+// 로터리 셀렉터 스위치의 "딸깍" 디텐트 소리 (짧은 이중 클릭)
+function playSwitchClick(){
+  if(!soundOn) return;
+  playNoiseClick({freq:4800, q:3, type:'bandpass', duration:0.01, gain:0.3, attack:0.0006});
+  setTimeout(()=>{ if(soundOn) playNoiseClick({freq:3600, q:3, type:'bandpass', duration:0.012, gain:0.22, attack:0.0006}); }, 18);
+}
+// 전자접촉기(MC1/MC2)가 붙거나 떨어질 때 나는 "철컥" 소리 (금속성 클릭 + 저음 질량감)
+function playContactorClack(){
+  if(!soundOn) return;
+  playNoiseClick({freq:2400, q:1.4, type:'bandpass', duration:0.014, gain:0.4, attack:0.0004});
+  playThump({freq:140, toFreq:50, duration:0.1, gain:0.3});
+}
+// 푸시버튼(PB0/1/2)을 누르거나 뗄 때 나는 눌림 소리 (부드러운 저음 통 + 살짝의 클릭)
+function playButtonClick(pressedOn){
+  if(!soundOn) return;
+  playNoiseClick({freq: pressedOn?900:1300, q:0.8, type:'lowpass', duration:0.03, gain:0.28, attack:0.001});
+  playThump({freq: pressedOn?95:135, toFreq: pressedOn?45:75, duration:0.055, gain:0.16});
+}
+// 도면 선택 칩을 누를 때 나는 가벼운 "틱" 소리
+function playChipClick(){
+  if(!soundOn) return;
+  playNoiseClick({freq:2600, q:2, type:'highpass', duration:0.014, gain:0.18, attack:0.0006});
 }
 
 // ============================================================
@@ -685,7 +722,7 @@ buttons.forEach(b=>{
     e.preventDefault();
     ui[b.id] = !ui[b.id];
     btn.classList.toggle('pressed', ui[b.id]);
-    if(audioCtx===null){ try{ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+    playButtonClick(ui[b.id]);
   };
   btn.addEventListener('pointerdown', toggle);
   btnBlock.appendChild(unit);
@@ -702,6 +739,7 @@ diagramBits.forEach(bit=>{
   `;
   unit.querySelector('.chip').addEventListener('click', ()=>{
     ui[bit.id] = !ui[bit.id];
+    playChipClick();
     renderDiagramNumber();
   });
   chipRow.appendChild(unit);
@@ -795,7 +833,8 @@ function render(){
   const bz = plc.get('P00021');
   const bzEl = document.getElementById('bzLamp');
   bzEl.classList.toggle('on', bz);
-  if(bz && !prevBz) beep();
+  if(bz && !prevBz) startBuzzer();
+  if(!bz && prevBz) stopBuzzer();
   prevBz = bz;
 
   const t = (name)=> plc.timers[name] ? (plc.timers[name].acc/10).toFixed(1)+'s / '+(plc.timers[name].preset/10).toFixed(1)+'s' : '0.0s';
