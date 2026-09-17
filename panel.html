@@ -524,13 +524,13 @@ buttons.forEach(b=>{
     <div class="btn-desc">${b.desc}</div>
   `;
   const btn = unit.querySelector('button');
-  const press = (e)=>{ e.preventDefault(); ui[b.id]=true; btn.classList.add('pressed');
-    if(audioCtx===null){ try{ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } };
-  const release = (e)=>{ e.preventDefault(); ui[b.id]=false; btn.classList.remove('pressed'); };
-  btn.addEventListener('pointerdown', press);
-  btn.addEventListener('pointerup', release);
-  btn.addEventListener('pointerleave', release);
-  btn.addEventListener('pointercancel', release);
+  const toggle = (e)=>{
+    e.preventDefault();
+    ui[b.id] = !ui[b.id];
+    btn.classList.toggle('pressed', ui[b.id]);
+    if(audioCtx===null){ try{ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+  };
+  btn.addEventListener('pointerdown', toggle);
   btnBlock.appendChild(unit);
 });
 
@@ -582,6 +582,7 @@ document.getElementById('t2SetInput').addEventListener('input', (e)=>{
 document.getElementById('resetBtn').addEventListener('click', ()=>{
   Object.keys(ui).forEach(k=> ui[k]=false);
   plc.bits={}; plc.prev={}; plc.timers={};
+  document.querySelectorAll('.pbtn').forEach(b=>b.classList.remove('pressed'));
   renderDiagramNumber();
 });
 
