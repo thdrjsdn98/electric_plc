@@ -277,7 +277,7 @@
 </head>
 <body>
 
-<h1>⚡ 0916_공도7 제어반 시뮬레이터 <span style="font-size:11px;color:var(--muted);font-weight:400;">v0.1.8</span></h1>
+<h1>⚡ 0916_공도7 제어반 시뮬레이터 <span style="font-size:11px;color:var(--muted);font-weight:400;">v0.1.9</span></h1>
 <div class="sub">전기기능사 실기 대비 · PB0/PB1/PB2 · SS·FLS·LS1·LS2·EOCR</div>
 
 <div class="board">
@@ -335,8 +335,9 @@
 </div>
 
 <details class="status" style="max-width:640px;margin:14px auto 0;">
-  <summary>📋 변경 이력 (v0.1.8)</summary>
+  <summary>📋 변경 이력 (v0.1.9)</summary>
   <div style="font-size:12px;line-height:1.7;margin-top:8px;">
+    <b>v0.1.9</b> — 패널 내장 시퀀스 섹션을 제거하고, 별도 페이지로 연결하는 링크 버튼으로 교체<br>
     <b>v0.1.8</b> — 실제 도면 사진(2~11,14,15번) 대조하여 동작 시퀀스 문서 업데이트 (MC1·MC2 상호 인터록 반영)<br>
     <b>v0.1.7</b> — 도면 1~18번 동작 시퀀스 설명을 패널 하단 접이식 섹션으로 삽입<br>
     <b>v0.1.6</b> — 하단 변경 이력(버전) 접이식 섹션 추가<br>
@@ -358,82 +359,10 @@
   </div>
 </details>
 
-<details class="status" style="max-width:640px;margin:14px auto 0;">
-  <summary>🧭 도면 1~18번 동작 시퀀스</summary>
-  <div style="font-size:12px;line-height:1.7;margin-top:8px;">
-    <div style="color:var(--muted);margin-bottom:8px;">
-      공통: EOCR 트립 시 전 도면 공통으로 즉시 정지.<br>
-      <b>[검증]</b>=시뮬레이터 직접 확인 / <b>[도면대조]</b>=실제 도면 사진과 대조 완료 / <b>[추정]</b>=대조 전
-    </div>
+<div class="toolbar" style="margin-top:8px;">
+  <a href="https://claude.ai/artifact/GGK2g6zE1HTEvP7VJaeW62" target="_blank" class="tool-btn" style="text-decoration:none;">🧭 도면 1~18번 동작 시퀀스 (별도 페이지)</a>
+</div>
 
-    <b>1번 [검증]</b><br>
-    SS=A: FLS 감지→X→MC1 즉시 기동. SS=M: PB1→X1 자기유지→MC1 즉시 기동, T1(5.0초) 후 MC2 추가 기동(MC1 유지).<br><br>
-
-    <b>2번 [도면대조]</b><br>
-    SS=A+FLS 또는 SS=M+PB1(자기유지)로 X 기동 → T 경과 후 FR(4.0초, 2초/2초)로 MC1↔MC2 교대운전.<br><br>
-
-    <b>3번 [도면대조]</b><br>
-    2번과 유사, X(SS=A 인터록 포함)+FLS 조건으로 FR(4초) 교대운전. SS=M은 PB0→PB1/T 자기유지로 별도 구동.<br><br>
-
-    <b>4번 [도면대조]</b><br>
-    X 기동 후 긴FR(14.0초, 7초/7초)로 MC1↔MC2 교대운전(2번의 긴 주기 버전).<br><br>
-
-    <b>5번 [도면대조]</b><br>
-    X 기동 후 FR(4초) 교대운전 + 좌우 대칭 T(지연접점)이 MC1/MC2에 추가로 걸림.<br><br>
-
-    <b>6번 [도면대조]</b><br>
-    SS=A+FLS 또는 수동(PB1/T) 경로로 X 기동 → FR(4초) 교대운전, 5번과 좌우 대칭 구조.<br><br>
-
-    <b>7번 [도면대조]</b><br>
-    X 기동 → FR 경유, T(지연접점) 두 개가 각각 MC1/MC2 담당하는 1회성 전환(X→MC1, T 경과 후 MC1→MC2).<br><br>
-
-    <b>8번 [도면대조]</b><br>
-    SS=A+FLS 또는 수동(PB1/T)으로 X 기동 → MC1·MC2 동시 기동, T(5.0초) 후 함께 정지. YL은 FR 위상과 연동.<br><br>
-
-    <b>9번 [도면대조]</b><br>
-    X 접점이 FR·YL·BZ(트립 경보, 1번과 공유) 구동. SS=A+FLS→MC1 직접 기동. SS=M(PB1/X 자기유지)→X 후 T 경과 시 MC2 기동.<br><br>
-
-    <b>10번 [도면대조]</b><br>
-    PB1(또는 X1 자기유지)→X1, LS1 시 T1(5초)→MC1. PB2(또는 X2 자기유지)→X2, LS2 시 T2(5초)→MC2.
-    상단 X1·X2·MC1·MC2 상호 인터록 접점이 WL 및 안전 인터록에 관여.<br><br>
-
-    <b>11번 [도면대조]</b><br>
-    PB1 또는 T1(자기유지)로 X1, PB2 또는 T2로 X2. <b>MC1=X1+LS1+(¬X2)</b>, <b>MC2=X2+LS2+(¬X1)</b> — 양쪽 상호 인터록으로 동시운전 방지.
-    WL은 X1·X2는 켜졌는데 해당 MC가 아직 안 붙은 대기 상태에 점등.<br><br>
-
-    <b>12번 [검증]</b> (직접 주신 코드 반영)<br>
-    PB1(엣지) 또는 T2 → X1 자기유지, LS1 시 MC1 기동 → T1(5.0초, 설정 가능) → X3. PB2 또는 T1 → X2 자기유지, LS2 시 MC2 기동 → T2(5.0초) → X4.<br>
-    <b>WL = T1 또는 T2 "동작 중"이면 즉시 점등(순시)</b>.<br><br>
-
-    <b>13번 [검증]</b> (직접 주신 코드 반영)<br>
-    12번과 유사하되 X1 성립에 LS1, T1 계열에 LS2·M00001이 더 얽혀 상호 연동. WL도 12번과 동일하게 순시(T1 또는 T2).<br><br>
-
-    <b>14번 [도면대조]</b><br>
-    LS1→X1, LS2→X2(레벨). <b>PB1+X1+X2 → T1(5초) → MC1</b>. <b>PB2+X1+X2 → T2(5초) → MC2</b>.
-    상단 MC1·MC2 상호 인터록 있음(동시운전 방지). WL은 MC1·MC2 둘 다 꺼져 있을 때 점등.<br><br>
-
-    <b>15번 [도면대조]</b><br>
-    14번과 거의 동일 구조(상호 인터록 포함). YL은 BZ와 같은 그룹으로 EOCR 트립 시 경보.<br><br>
-
-    <b>16번 [검증]</b> (직접 주신 코드 반영)<br>
-    LS1→T1(5초)→X3, LS2→T2(5초)→X4. (PB1|X1|X3)→X1 자기유지&MC1. (PB2|X2|X4)→T1 확인 후 NOT T2면 MC2, T2면 WL.<br>
-    <b>WL = X2조건 AND T1(한시) AND T2(한시)</b> — 직렬(AND) 구조.<br><br>
-
-    <b>17번 [검증]</b> (직접 주신 코드 반영, PB0 버그 수정됨)<br>
-    LS1→X1, LS2→X2. PB1+배타조건→MC1 기동+T1(5초)→X3. PB2+X4 조합→MC2 기동+T2(5초)→X4.<br>
-    <b>WL = MC1조건 AND T1(한시) AND T2(한시)</b> — 16번과 같은 AND 구조.<br><br>
-
-    <b>18번 [검증]</b> (직접 주신 코드 + WL 추가, PB0 버그 수정됨)<br>
-    LS1→X1, LS2→X2. PB1+X1·¬X2(또는 X3)→MC1 기동+T1(5초)→X3. PB2+¬X1·X2(또는 X4)→MC2 기동+T2(5초)→X4.<br>
-    <b>WL = T1(한시) 또는 T2(한시)</b> — 16·17번과 달리 병렬(OR) 구조.<br><br>
-
-    <div style="color:var(--muted);">
-      참고: 1·9번의 BZ·YL은 EOCR 트립 시 FR(4초, 2초/2초)로 부저→황색등이 번갈아 켜지는 경보이고,
-      2~8번은 트립 시 단순 점등(플리커 아님)입니다. 2~11·14·15번은 실제 도면 사진과 대조를 마쳤지만
-      접점 하나하나까지 시뮬레이터 재생 검증은 아직입니다. 다르게 느껴지는 번호가 있으면 알려주세요.
-    </div>
-  </div>
-</details>
 
 
 <script>
