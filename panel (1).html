@@ -351,7 +351,7 @@
 </head>
 <body>
 
-<h1>⚡ 0916_공도7 제어반 시뮬레이터 <span style="font-size:11px;color:var(--muted);font-weight:400;">v0.3.5</span></h1>
+<h1>⚡ 0916_공도7 제어반 시뮬레이터 <span style="font-size:11px;color:var(--muted);font-weight:400;">v0.3.6</span></h1>
 <div class="sub">전기기능사 실기 대비 · PB0/PB1/PB2 · SS·FLS·LS1·LS2·EOCR</div>
 
 <div class="board">
@@ -409,9 +409,10 @@
 </div>
 
 <details class="status" style="max-width:640px;margin:14px auto 0;">
-  <summary>📋 변경 이력 (v0.3.5)</summary>
+  <summary>📋 변경 이력 (v0.3.6)</summary>
   <div style="font-size:12px;line-height:1.7;margin-top:8px;">
-    <b>v0.3.5</b> — 17번 도면 오류 수정<br>
+    <b>v0.3.6</b> — 3번 도면 오류 수정<br>
+	<b>v0.3.5</b> — 17번 도면 오류 수정<br>
 	<b>v0.3.4</b> — 13번 도면 오류 수정<br>
 	<b>v0.3.3</b> — 도면 오류 수정<br>
     <b>v0.3.2</b> — FR/긴FR 자기 리셋(반복) 구문 누락 수정 → 1번 등 트립 경보가 한 번만 울리고 멈추던 문제 해결, 이제 트립 지속 시 계속 반복 점멸<br>
@@ -452,7 +453,7 @@
 <script>
 const NEW_DIAGRAMS = {"1":[["LOAD","P00007"],["MPUSH"],["AND_NOT","T0000"],["TON","FR",40],["MLOAD"],["CMP","AND",">",20,"FR",0],["OUT","P00021"],["MPOP"],["CMP","AND",">=",40,"FR",20],["OUT","P00020"],["LOAD_NOT","P00007"],["MPUSH"],["AND","P00003"],["AND","P00004"],["OUT","M00000"],["MPOP"],["LOAD_NOT","P00003"],["AND_NOT","P00000"],["LOAD","P00001"],["OR","M00001"],["AND_LOAD"],["OR","M00000"],["AND_LOAD"],["MPUSH"],["AND_NOT","M00000"],["TON","T0001",50],["OUT","M00001"],["MLOAD"],["OUT","P00022"],["MPOP"],["AND","T0001"],["OUT","P00023"]],
                       "2":[["LOAD","P00007"],["OUT","P00020"],["OUT","P00021"],["LOAD_NOT","P00007"],["MPUSH"],["LOAD","P00003"],["AND_NOT","P00004"],["LOAD_NOT","P00003"],["AND_NOT","P00000"],["LOAD","P00001"],["OR","M00000"],["AND_LOAD"],["OR_LOAD"],["AND_LOAD"],["OUT","M00000"],["TON","T0001",50],["MPOP"],["AND","M00000"],["AND","T0001"],["MPUSH"],["AND_NOT","T0000"],["TON","T0000",40],["MLOAD"],["CMP","AND",">",20,"FR",0],["OUT","P00022"],["MPOP"],["CMP","AND",">=",40,"FR",20],["OUT","P00023"]],
-                      "3":[["LOAD","P00007"],["OUT","P00020"],["OUT","P00021"],["LOAD","P00007"],["MPUSH"],["LOAD","M00000"],["LOAD","P00003"],["AND","P00004"],["OR_LOAD"],["AND_LOAD"],["MPUSH"],["CMP","AND",">",20,"FR",0],["OUT","P00022"],["MLOAD"],["CMP","AND",">=",40,"FR",20],["OUT","P00023"],["MPOP"],["AND_NOT","T0000"],["TON","FR",40],["MPOP"],["AND_NOT","P00003"],["AND_NOT","P00000"],["LOAD","P00001"],["OR","M00001"],["AND_LOAD"],["MPUSH"],["AND","T0001"],["OUT","M00000"],["MLOAD"],["TON","T0001",50],["MPOP"],["OUT","M00001"]],
+                      "3":[["LOAD","P00007"],["OUT","P00020"],["OUT","P00021"],["LOAD_NOT","P00007"],["MPUSH"],["LOAD","M00000"],["LOAD","P00003"],["AND","P00004"],["OR_LOAD"],["AND_LOAD"],["MPUSH"],["CMP","AND",">",20,"FR",0],["OUT","P00022"],["MLOAD"],["CMP","AND",">=",40,"FR",20],["OUT","P00023"],["MPOP"],["AND_NOT","T0000"],["TON","FR",40],["MPOP"],["AND_NOT","P00003"],["AND_NOT","P00000"],["LOAD","P00001"],["OR","M00001"],["AND_LOAD"],["MPUSH"],["AND","T0001"],["OUT","M00000"],["MLOAD"],["TON","T0001",50],["MPOP"],["OUT","M00001"]],
                       "4":[["LOAD","P00007"],["OUT","P00020"],["OUT","P00021"],["LOAD_NOT","P00007"],["MPUSH"],["LOAD","P00003"],["AND","P00004"],["LOAD_NOT","P00003"],["AND_NOT","P00000"],["LOAD","P00001"],["OR","M00000"],["AND_LOAD"],["OR_LOAD"],["AND_LOAD"],["MPUSH"],["AND_NOT","T0000"],["TON","T0003",140],["MPOP"],["OUT","M00000"],["MPOP"],["AND","M00000"],["MPUSH"],["CMP","AND",">",70,"FR",0],["OUT","P00022"],["MPOP"],["CMP","AND",">=",140,"FR",70],["MPUSH"],["AND_NOT","T0001"],["OUT","P00023"],["MPOP"],["TON","T0001",50]],
                       "5":[["LOAD","P00007"],["OUT","P00020"],["OUT","P00021"],["LOAD_NOT","P00007"],["LOAD","P00003"],["AND","P00004"],["LOAD_NOT","P00003"],["AND_NOT","P00000"],["LOAD","P00001"],["OR","M00000"],["AND_LOAD"],["OR_LOAD"],["AND_LOAD"],["OUT","M00000"],["TON","T",50],["MPUSH"],["AND_NOT","T0001"],["AND_NOT","T0000"],["TON","FR",40],["MLOAD"],["CMP","AND",">",20,"FR",0],["OUT","P00022"],["MPOP"],["CMP","LOAD",">=",40,"FR",20],["OR","T0001"],["AND_LOAD"],["OUT","P00023"]],
                       "6":[["LOAD","P00007"],["OUT","P00020"],["OUT","P00021"],["LOAD_NOT","P00007"],["MPUSH"],["AND","P00003"],["AND","P00004"],["OUT","M00000"],["MPOP"],["LOAD_NOT","P00003"],["AND_NOT","P00000"],["LOAD","P00001"],["OR","M00002"],["AND_LOAD"],["OR","M00000"],["AND_LOAD"],["MPUSH"],["AND_NOT","M00000"],["TON","T",50],["OUT","M00002"],["MLOAD"],["AND","T0001"],["AND_NOT","T0000"],["TON","FR",40],["MLOAD"],["CMP","AND",">",20,"FR",0],["OUT","P00022"],["MPOP"],["CMP","LOAD",">=",40,"FR",20],["OR_NOT","T0001"],["AND_LOAD"],["OUT","P00023"]],
