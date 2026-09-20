@@ -572,7 +572,7 @@
   .diagram-overlay .rail{ stroke:#c9ccd1; stroke-width:5; opacity:0; }
   .diagram-overlay .rail.on{
      stroke:#ff3b30; stroke-width:3; opacity:.9; 
-     stroke-dasharray:3 17; animation:dOverlayFlow .65s linear infinite;
+     stroke-dasharray:8 6; animation:dOverlayFlow .65s linear infinite;
      filter:
         drop-shadow(0 0 2px rgba(255,59,48,.9)) 
         drop-shadow(0 0 5px rgba(255,59,48,.45));
@@ -582,7 +582,7 @@
     opacity:1;
 
     /* 짧은 전류 입자 */
-    stroke-dasharray:3 17;
+    stroke-dasharray:8 6;
 
     /* 실제 흐르는 느낌 */
     animation:dOverlayFlow .65s linear infinite;
