@@ -139,7 +139,7 @@ const OVERLAY_CONFIGS = {
     ],
   },
   "5": {
-    railY: 251, coilY: 750, leftX: 593, rightX: 1570,
+    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
     x: { EOCR:593, YL:674, BZ:756, FLS:837, X:1000, T:1081, FR:1163, MC1:1244, MC2:1326, RL:1489, GL:1570 },
     frContacts: [
       { label:'FR-1', x:1244, y1:600, y2:645, addr:'P00022' }, // → MC1
@@ -164,7 +164,7 @@ const OVERLAY_CONFIGS = {
   },
   "8": {
     railY: 292, coilY: 750, leftX: 593, rightX: 1570,
-    x: { EOCR:593, BZ:674, FLS:755, X:918, FR:1000, YL:1081, T:1163, MC1:1325, MC2:1407, RL:1488, GL:1570 },
+    x: { EOCR:593, BZ:674, FLS:755, X:837, FR:1000, YL:1081, T:1163, MC1:1325, MC2:1407, RL:1488, GL:1570 },
     frContacts: [
       { label:'FR-1', x:1000, y1:655, y2:695, addr:'P00020' }, // → YL
     ],
@@ -216,13 +216,165 @@ const OVERLAY_CONFIGS = {
   },
 };
 
+function overlayTerminalOn(resolved){
+  if(resolved.kind==='eocr') return !ui.eocr;
+  if(resolved.kind==='timer'){ const tm = plc.timers[resolved.addr]; return !!(tm && tm.en); }
+  return !!plc.get(resolved.addr);
+}
+
+const OVERLAY_SVGNS = 'http://www.w3.org/2000/svg';
+let overlayBuiltFor = null;
+let overlayWireEls = {}, overlayCoilEls = {}, overlayFrEls = {}, overlayCustomEls = {}, overlayLeftPowerEls = {}, overlayGroundEls = {};
+
+
 // ============================================================
-// 도면 2~18 실제 배선 추적 오버레이 (자동 픽셀 추적 결과)
-// 원본 이미지(1754x1240)에서 텍스트/기호를 제거한 순수 배선만 남긴 뒤,
-// 각 하단 표시등/코일 지점에서 상단 공통선까지 실제 검은 선을 따라
-// 최단 경로 추적(BFS)한 좌표입니다. 도면마다 실제 회로 구조가 서로
-// 다르므로 (예: FR 계전기 위치, X 접점 위치 등) 도면별로 좌표가 다릅니다.
+// 좌측 주회로(1~18 공통 기반) 실제 배선 추적 오버레이
+// - 공개도면 공통 좌측 전력부(MCCB/EOCR/MC1/MC2/M1/M2) 중심
+// - MC1/MC2 여자 상태에 맞춰 좌측 주회로 전류 흐름 표시
 // ============================================================
+const LEFT_POWER_REAL_FLOW = [
+  // 도면 1 기준 실측 좌표 보정: 기존보다 오른쪽/아래로 맞춤
+  // TB1 -> MCCB -> EOCR 입력부 : MCCB는 항상 ON으로 가정하므로 상시 통전
+  {id:'lp-l1-src', state:'sourcePower', points:[[145,255],[145,307],[145,337],[145,426]]},
+  {id:'lp-l2-src', state:'sourcePower', points:[[186,255],[186,307],[186,337],[186,426]]},
+  {id:'lp-l3-src', state:'sourcePower', points:[[226,255],[226,307],[226,337],[226,426]]},
+
+  // EOCR 통과 후 MC1/MC2 주접점 상단까지 : 주접점 전단은 상시 통전
+  {id:'lp-l1-pre', state:'sourcePower', points:[[145,426],[145,480],[145,568]]},
+  {id:'lp-l2-pre', state:'sourcePower', points:[[186,426],[186,480],[186,568]]},
+  {id:'lp-l3-pre', state:'sourcePower', points:[[226,426],[226,480],[226,568]]},
+
+  // FUSE 상/하단 제어전원 : MCCB ON 상태에서 항상 통전
+  // 상단 FUSE -> 제어회로 상단 전원
+  {id:'lp-fuse-top-in', state:'fusePower', points:[[145,366],[331,366]]},
+  {id:'lp-fuse-top-out', state:'fusePower', points:[[372,366],[489,366],[489,292],[593,292]]},
+  // 하단 FUSE -> 제어회로 하단 공통선
+  {id:'lp-fuse-bot-in', state:'fusePower', points:[[226,400],[331,400]]},
+  {id:'lp-fuse-bot-out', state:'fusePower', points:[[372,400],[489,400],[489,820],[593,820]]},
+
+  // MC1 정회전 가지 -> TB2 -> M1
+  {id:'lp-mc1-l1', state:'mc1Power', points:[[145,568],[145,608],[145,738],[145,774]]},
+  {id:'lp-mc1-l2', state:'mc1Power', points:[[186,568],[186,608],[186,738],[186,774]]},
+  {id:'lp-mc1-l3', state:'mc1Power', points:[[226,568],[226,608],[226,738],[226,774]]},
+
+  // MC2 역회전 입력 교차배선 -> 실제 MC2 주접점 상단(원본 검은선 실측)
+  // PE(267)는 상선이 아니므로 MC2 3상에서 제외한다.
+  {id:'lp-mc2-feed1', state:'sourcePower', points:[[145,546],[349,546],[349,568],[349,608]]},
+  {id:'lp-mc2-feed2', state:'sourcePower', points:[[186,526],[390,526],[390,568],[390,608]]},
+  {id:'lp-mc2-feed3', state:'sourcePower', points:[[226,506],[431,506],[431,568],[431,608]]},
+
+  // MC2 역회전 가지 -> TB3 -> M2 (MC2 실제 접점 x좌표)
+  {id:'lp-mc2-l1', state:'mc2Power', points:[[349,608],[349,738],[349,774]]},
+  {id:'lp-mc2-l2', state:'mc2Power', points:[[390,608],[390,738],[390,774]]},
+  {id:'lp-mc2-l3', state:'mc2Power', points:[[431,608],[431,738],[431,774]]},
+];
+
+// 보호도체(PE)는 통전 애니메이션과 분리해 항상 녹색으로 표시한다.
+// TB1 PE -> TB2/M1 PE/접지, TB1 PE -> TB3/M2 PE/접지의 원본 검은선 경로.
+const LEFT_POWER_GROUND_FLOW = [
+  {id:'pe-m1', points:[[267,255],[267,480],[267,738],[267,806]]},
+  {id:'pe-m2-bridge', points:[[267,480],[470,480],[470,738],[470,806]]},
+];
+
+function leftPowerStates(){
+  const mc1 = !!plc.get('P00022');
+  const mc2 = !!plc.get('P00023');
+  return {
+    sourcePower: true,   // MCCB ON 상시
+    fusePower: true,     // FUSE 전후 제어전원 상시
+    mc1Power: mc1,
+    mc2Power: mc2,
+  };
+}
+
+// ============================================================
+// 도면 1 실제 배선 추적 오버레이
+// - 원본 1754x1240 좌표계에 맞춰 검은 배선의 꺾임을 그대로 따라감
+// - PLC 계산은 기존 NEW_DIAGRAMS/PLC 엔진을 그대로 사용
+// - 2~18번은 기존 세로선 오버레이 방식 유지
+// ============================================================
+const DIAGRAM1_REAL_FLOW = [
+  // 전원/공통 버스
+  {id:'feed-pre',       state:'controlPower', points:[[489,292],[593,292]]},
+  {id:'feed-normal',    state:'eocrNormal',   points:[[593,292],[1570,292]]},
+  {id:'return-bus',     state:'controlPower', points:[[489,820],[1570,820]]},
+
+  // EOCR 트립 표시/FR 점멸 계통 (원본 좌측 가지)
+  {id:'trip-feed',      state:'tripAny',      points:[[593,292],[593,490],[674,490],[674,610]]},
+  {id:'fr-coil-feed',   state:'fr',           points:[[674,610],[674,720]]},
+  {id:'fr-return',      state:'fr',           points:[[674,780],[674,820]]},
+  {id:'yl-feed',        state:'yl',           points:[[674,610],[755,610],[755,720]]},
+  {id:'yl-return',      state:'yl',           points:[[755,780],[755,820]]},
+  {id:'bz-feed',        state:'bz',           points:[[674,610],[837,610],[837,720]]},
+  {id:'bz-return',      state:'bz',           points:[[837,780],[837,820]]},
+
+  // FLS 입력 표시 가지
+  {id:'eocr-mid-branch', state:'eocrNormal', points:[[593,490],[674,490]]},
+  {id:'fls-ind-feed',   state:'fls',          points:[[1081,490],[919,490],[919,720]]},
+  {id:'fls-ind-return', state:'fls',          points:[[919,780],[919,820]]},
+
+  // 자동(A) : SS(A) -> FLS -> X
+  {id:'auto-a-feed', state:'eocrNormal', points:[[1081,292],[1081,333]]},
+  {id:'auto-fls-feed', state:'fls', points:[[1081,373],[1081,537]]},
+  {id:'x-coil-feed', state:'x', points:[[1326,610],[1326,720]]},
+  {id:'x-return', state:'x', points:[[1326,780],[1326,820]]},
+
+  // 수동(M) : SS(M) -> PB0 -> PB1 또는 자기유지 접점
+  {id:'manual-common',  state:'manualRun',    points:[[1163,292],[1163,490]]},
+  {id:'manual-pb1',     state:'manualPB1',    points:[[1163,490],[1163,610]]},
+  {id:'manual-hold',    state:'manualHold',   points:[[1163,490],[1244,490],[1244,610],[1163,610]]},
+
+  // 자동 X 접점이 운전 버스를 직접 공급하는 가지
+  {id:'x-contact-feed', state:'autoRun',      points:[[1326,292],[1326,610]]},
+
+  // 운전 공통선 및 T/MC1/MC2
+  {id:'run-bus',        state:'runBus',       points:[[1163,610],[1407,610]]},
+  {id:'t-coil-feed',    state:'t',            points:[[1163,610],[1163,720]]},
+  {id:'t-return',       state:'t',            points:[[1163,780],[1163,820]]},
+  {id:'mc1-feed',       state:'mc1',          points:[[1326,610],[1326,720]]},
+  {id:'mc1-return',     state:'mc1',          points:[[1326,780],[1326,820]]},
+  {id:'mc2-feed',       state:'mc2',          points:[[1407,610],[1407,720]]},
+  {id:'mc2-return',     state:'mc2',          points:[[1407,780],[1407,820]]},
+
+  // MC1/MC2 보조접점 -> 표시등 RL/GL
+  {id:'rl-feed',        state:'mc1',          points:[[1489,292],[1489,720]]},
+  {id:'rl-return',      state:'mc1',          points:[[1489,780],[1489,820]]},
+  {id:'gl-feed',        state:'mc2',          points:[[1570,292],[1570,720]]},
+  {id:'gl-return',      state:'mc2',          points:[[1570,780],[1570,820]]},
+];
+
+function diagram1FlowStates(){
+  const t0 = plc.timers['T0000'];
+  const t1 = plc.timers['T0001'];
+  const fr  = !!(t0 && t0.en);
+  const t   = !!(t1 && t1.en);
+  const yl  = !!plc.get('P00020');
+  const bz  = !!plc.get('P00021');
+  const x   = !!plc.get('M00000');
+  const hold= !!plc.get('M00001');
+  const mc1 = !!plc.get('P00022');
+  const mc2 = !!plc.get('P00023');
+  const fls = !!ui.fls;
+  const controlPower = true;
+  const eocrNormal = !ui.eocr;
+
+  // 실제 운전 공통선에 부하가 붙어 있는 동안만 전류 입자를 표시
+  const runBus = t || mc1 || mc2;
+  const manualRun = !ui.eocr && !ui.ss && !ui.pb0 && runBus;
+  const manualPB1 = manualRun && !!ui.pb1;
+  const manualHold = manualRun && !ui.pb1 && hold;
+  const autoRun = !ui.eocr && x && runBus;
+  const tripAny = fr || yl || bz;
+  const normalAny = x || fls || runBus || mc1 || mc2;
+  const any = tripAny || normalAny;
+
+  return { controlPower, eocrNormal, any, normalAny, tripAny, fr, yl, bz, fls, x, t, mc1, mc2,
+           runBus, manualRun, manualPB1, manualHold, autoRun };
+}
+
+
+
+// v0.3.15: 기준 파일의 도면별 보조회로 실제 연결 경로
 const DIAGRAM_REAL_FLOW = {
   "2": { topY:292, bottomY:822, paths: {
     EOCR: [[593,718],[593,292]],
@@ -447,149 +599,60 @@ const DIAGRAM_REAL_FLOW = {
   }},
 };
 
-function overlayTerminalOn(resolved){
-  if(resolved.kind==='eocr') return !ui.eocr;
-  if(resolved.kind==='timer'){ const tm = plc.timers[resolved.addr]; return !!(tm && tm.en); }
-  return !!plc.get(resolved.addr);
+// 원본 JPG에서 검은 직선 배선을 검출해 저장한 좌표입니다.
+// 2~18번은 추정 템플릿 대신 이 좌표만 따라가므로 빨간선이 원본 배선 밖으로 벗어나지 않습니다.
+const DETECTED_WIRE_GEOMETRY = {"2":{"v":[[511,298,354],[511,404,821],[592,288,741],[674,618,741],[674,781,825],[756,659,740],[756,784,825],[837,496,741],[1000,288,333],[1000,373,537],[1000,597,741],[1000,781,825],[1081,455,537],[1081,582,621],[1081,701,741],[1082,288,825],[1244,455,741],[1244,781,825],[1325,615,659],[1326,699,741],[1406,699,739],[1407,781,825],[1488,289,333],[1488,373,741],[1488,781,825],[1570,293,741]],"h":[[292,511,634],[292,674,1570],[353,1012,1085],[496,853,1163],[536,589,674],[618,996,1056],[618,1241,1407],[659,671,754],[700,996,1081],[746,850,939],[822,511,1570]]},"3":{"v":[[511,303,359],[511,404,821],[592,288,741],[592,288,819],[674,536,571],[674,618,741],[674,781,819],[756,659,825],[837,619,659],[837,699,741],[918,289,333],[918,373,659],[918,373,741],[919,782,825],[1000,288,333],[1000,373,455],[1000,495,741],[1081,414,741],[1244,289,333],[1244,462,518],[1244,577,741],[1244,782,825],[1325,495,537],[1326,497,825],[1407,288,333],[1407,373,741],[1488,293,333],[1488,373,741],[1488,783,820]],"h":[[292,674,1489],[353,1012,1248],[414,996,1080],[496,1241,1326],[537,589,1003],[618,837,922],[659,671,755],[822,511,1489]]},"4":{"v":[[511,293,336],[511,404,821],[592,288,741],[592,288,819],[674,536,577],[674,618,741],[674,783,825],[756,673,825],[837,496,741],[837,781,825],[1000,373,478],[1000,577,741],[1000,781,825],[1080,615,679],[1080,288,825],[1244,373,507],[1244,577,741],[1244,781,825],[1325,577,659],[1326,497,825],[1407,618,740],[1407,781,825],[1488,288,333],[1488,373,741],[1570,293,741]],"h":[[292,511,634],[292,674,1570],[353,1012,1085],[496,877,1326],[618,996,1163],[659,671,756],[746,871,939],[822,511,1570]]},"5":{"v":[[511,294,350],[511,404,821],[592,270,741],[674,537,578],[674,618,741],[674,783,819],[756,659,741],[756,784,820],[837,332,741],[1000,455,496],[1000,536,741],[1000,782,825],[1081,414,496],[1081,536,581],[1082,702,739],[1162,536,618],[1162,659,741],[1162,455,820],[1244,574,618],[1244,659,741],[1244,783,820],[1326,574,618],[1326,659,740],[1488,332,741],[1570,332,741]],"h":[[312,849,1085],[455,834,999],[536,589,674],[578,996,1407],[659,671,754],[700,996,1081],[700,1341,1406],[822,511,1570]]},"6":{"v":[[511,292,344],[511,404,821],[592,288,741],[674,539,578],[674,618,740],[674,781,825],[756,659,740],[756,782,825],[837,373,741],[1000,496,537],[1000,577,740],[1000,781,825],[1080,373,415],[1080,615,659],[1080,288,740],[1082,781,825],[1244,293,333],[1244,373,659],[1244,782,819],[1325,577,741],[1326,577,825],[1407,701,740],[1488,492,527],[1488,577,617],[1488,699,740],[1488,781,825],[1570,497,741],[1570,782,821]],"h":[[292,674,1244],[353,849,1085],[495,834,999],[496,1078,1570],[536,589,674],[618,1084,1158],[618,1488,1573],[659,671,756],[700,1322,1407],[700,1489,1573],[746,850,939],[822,511,1570]]},"7":{"v":[[512,293,827],[592,289,747],[674,540,582],[674,622,746],[674,789,832],[756,664,746],[756,790,826],[836,499,747],[837,787,832],[999,375,540],[999,710,746],[1000,289,832],[1081,289,326],[1081,457,540],[1082,581,699],[1243,289,326],[1243,375,541],[1244,375,832],[1325,619,663],[1325,788,832],[1406,622,664],[1406,705,746],[1406,622,832],[1488,289,334],[1488,375,747],[1570,294,747],[1570,787,827]],"h":[[292,511,617],[292,674,1570],[354,1011,1085],[498,837,1003],[498,837,1162],[540,589,673],[622,996,1163],[623,1240,1407],[664,671,754],[752,850,939],[828,511,1570]]},"8":{"v":[[511,292,327],[511,406,827],[592,289,747],[674,622,664],[674,705,746],[756,498,747],[756,789,826],[836,764,834],[999,619,747],[1000,619,832],[1081,622,664],[1081,705,746],[1162,289,334],[1162,375,417],[1162,457,540],[1162,581,664],[1162,375,832],[1325,289,334],[1325,375,623],[1326,706,746],[1406,500,541],[1406,581,746],[1406,581,832],[1488,289,334],[1488,375,747],[1488,787,832],[1569,375,746],[1570,294,827]],"h":[[292,511,1570],[354,930,1167],[498,756,921],[499,1159,1244],[499,1322,1407],[622,915,1080],[622,589,1325],[705,1325,1410],[753,769,858],[828,511,1570]]},"9":{"v":[[511,311,367],[511,404,821],[592,288,741],[592,288,820],[674,496,537],[674,577,741],[674,781,825],[755,615,660],[755,699,740],[756,699,825],[837,618,657],[837,699,741],[1000,289,333],[1000,373,537],[1000,595,707],[1000,782,819],[1081,496,741],[1081,782,819],[1244,288,333],[1244,373,415],[1244,462,503],[1244,577,729],[1244,781,825],[1325,495,537],[1325,577,617],[1325,699,741],[1326,700,825],[1408,288,741],[1488,289,333],[1488,373,741],[1570,293,741],[1570,784,819]],"h":[[292,674,1570],[353,1012,1248],[495,589,673],[496,996,1080],[496,1241,1324],[618,752,815],[618,918,1003],[618,1241,1326],[746,1121,1183],[822,511,1570]]},"10":{"v":[[511,292,339],[511,404,821],[592,288,741],[592,288,819],[674,699,740],[674,781,825],[796,288,333],[796,373,741],[796,373,820],[877,288,333],[877,373,414],[877,615,659],[878,288,825],[959,618,659],[959,699,741],[1040,288,741],[1041,782,820],[1122,373,414],[1122,615,659],[1122,699,740],[1122,781,825],[1203,699,740],[1204,619,825],[1284,289,333],[1284,373,415],[1284,288,741],[1447,373,741],[1448,288,825],[1529,373,741]],"h":[[292,755,1529],[414,793,878],[414,793,1121],[496,1281,1366],[618,1037,1204],[822,511,1529]]},"11":{"v":[[511,302,358],[511,404,821],[592,288,741],[674,699,739],[674,781,825],[796,289,333],[796,373,741],[796,297,819],[877,288,333],[877,373,414],[877,615,659],[878,373,741],[878,782,819],[959,619,659],[959,699,741],[1040,288,333],[1040,373,741],[1041,782,820],[1122,288,333],[1122,373,414],[1122,615,659],[1122,699,740],[1122,782,819],[1203,618,659],[1204,699,741],[1284,373,415],[1284,455,741],[1284,288,825],[1447,373,741],[1448,288,825],[1530,293,741]],"h":[[292,755,1529],[414,1037,1121],[496,1281,1365],[618,793,959],[822,511,1529]]},"12":{"v":[[512,293,821],[592,288,741],[592,288,820],[674,619,659],[674,782,825],[796,289,332],[796,373,741],[796,295,825],[877,288,333],[877,615,659],[878,288,825],[959,288,333],[959,619,659],[959,781,825],[1040,288,332],[1040,373,741],[1040,373,825],[1122,288,333],[1122,374,418],[1122,781,825],[1203,289,332],[1203,373,415],[1203,618,659],[1204,373,825],[1284,296,333],[1285,296,741],[1448,373,741],[1448,782,824],[1529,293,331],[1529,373,741]],"h":[[292,755,1529],[414,793,959],[414,1037,1101],[414,793,1366],[618,589,674],[618,793,959],[700,1037,1122],[822,511,1529]]},"13":{"v":[[511,292,374],[511,404,821],[592,288,741],[674,619,659],[674,700,740],[674,782,819],[796,289,333],[796,373,478],[796,536,741],[796,373,825],[877,373,418],[877,699,740],[878,288,825],[959,374,414],[959,619,659],[959,781,825],[1040,295,333],[1040,373,741],[1041,781,825],[1122,288,333],[1122,374,417],[1122,701,740],[1204,288,825],[1284,289,333],[1284,373,741],[1285,782,825],[1448,296,741],[1529,373,741]],"h":[[292,755,1529],[414,1037,1204],[414,793,1365],[618,589,674],[618,793,959],[700,1037,1122],[822,511,1529]]},"14":{"v":[[511,299,355],[511,404,821],[592,288,741],[674,618,659],[674,699,740],[796,288,333],[796,373,741],[796,373,825],[877,288,333],[877,373,741],[878,373,825],[959,288,333],[959,495,537],[959,577,618],[959,658,741],[959,781,825],[1040,288,333],[1040,373,414],[1040,288,741],[1122,289,333],[1122,373,741],[1203,373,455],[1203,533,618],[1204,288,741],[1204,785,825],[1284,373,455],[1284,699,740],[1284,288,825],[1366,288,333],[1366,373,741],[1366,781,825],[1447,373,415],[1448,293,741],[1448,782,820]],"h":[[292,755,1448],[414,1200,1288],[536,1200,1284],[618,589,673],[700,956,1039],[822,511,1448]]},"15":{"v":[[511,292,332],[511,404,821],[592,288,741],[592,288,819],[674,618,659],[674,699,740],[674,782,825],[796,373,741],[796,373,819],[878,295,741],[878,782,819],[959,288,333],[959,394,450],[959,495,618],[959,658,741],[959,782,819],[1040,699,741],[1040,414,825],[1203,373,741],[1204,288,820],[1284,289,333],[1284,373,415],[1284,455,497],[1284,536,606],[1284,658,741],[1285,288,825],[1366,288,333],[1366,373,578],[1448,288,741],[1529,293,333],[1529,373,415],[1529,455,741]],"h":[[292,755,1529],[414,956,1039],[536,956,1122],[578,1281,1365],[618,589,673],[699,956,1039],[700,1281,1366],[822,511,1529]]},"16":{"v":[[511,301,357],[511,404,821],[592,288,741],[674,699,741],[674,782,825],[796,373,741],[796,373,825],[878,296,741],[959,288,333],[959,373,741],[1040,373,417],[1041,295,825],[1204,288,741],[1204,781,825],[1284,373,455],[1284,288,659],[1286,699,740],[1286,782,825],[1366,288,333],[1366,374,418],[1366,615,659],[1366,699,739],[1366,782,825],[1447,373,415],[1447,662,707],[1448,288,825],[1529,373,741]],"h":[[292,755,1529],[414,956,1448],[618,589,674],[618,1281,1447],[700,956,1041],[822,511,1529]]},"17":{"v":[[512,292,821],[592,288,741],[674,618,659],[674,699,741],[674,783,825],[796,288,333],[796,373,741],[797,296,825],[877,288,333],[878,373,741],[959,373,455],[959,495,537],[959,577,740],[960,782,825],[1040,288,333],[1040,373,455],[1040,495,537],[1040,577,618],[1040,700,740],[1041,373,825],[1122,373,741],[1203,288,333],[1203,373,455],[1203,608,654],[1204,373,741],[1204,782,825],[1284,289,333],[1284,373,415],[1284,615,660],[1284,699,740],[1284,373,825],[1366,619,741],[1448,373,741]],"h":[[292,532,596],[292,755,1448],[414,956,1044],[415,1200,1283],[618,1200,1366],[700,956,1041],[822,511,1448]]},"18":{"v":[[511,292,339],[511,404,821],[592,288,741],[592,288,819],[674,699,741],[674,782,820],[796,373,741],[796,373,819],[878,288,741],[878,782,819],[959,373,415],[959,455,496],[959,536,741],[960,782,819],[1040,373,578],[1040,699,741],[1040,288,825],[1122,288,333],[1122,373,741],[1202,289,333],[1203,455,496],[1203,536,741],[1204,289,825],[1284,373,578],[1284,700,740],[1284,288,825],[1366,373,741],[1448,295,741]],"h":[[292,755,1529],[414,1444,1529],[578,956,1285],[618,589,674],[700,956,1285],[822,511,1448]]}};
+function buildGeneric19AuxFlow(dnum, cfg){
+  const segs = [];
+  const add = (id,state,points)=>segs.push({id,state,points});
+  const topY = cfg.railY;
+  const bottomY = 820;
+  const leftX = cfg.leftX;
+  const tripY = 490;
+  const tripBusY = 610;
+  const runBusY = 610;
+
+  add('g-feed-pre','controlPower',[[507,topY],[leftX,topY]]);
+  add('g-top-bus','eocrn',[[leftX,topY],[cfg.rightX,topY]]);
+  add('g-bottom-bus','controlPower',[[leftX,bottomY],[cfg.rightX,bottomY]]);
+
+  if(cfg.x.EOCR != null){
+    add('g-eocr-ind','eocrn',[[leftX,topY],[leftX,bottomY]]);
+  }
+
+  ['FR','YL','BZ'].forEach(label=>{
+    const x = cfg.x[label];
+    if(x==null) return;
+    const key = label.toLowerCase();
+    add(`g-${key}` , key, [[leftX,topY],[leftX,tripY],[x,tripY],[x,bottomY-100]]);
+    add(`g-${key}-ret`, key, [[x,bottomY-40],[x,bottomY]]);
+  });
+
+  if(cfg.x.FLS != null){
+    add('g-fls','fls',[[Math.min(cfg.x.FLS, leftX+330),tripY],[cfg.x.FLS,tripY],[cfg.x.FLS,bottomY-100]]);
+    add('g-fls-ret','fls',[[cfg.x.FLS,bottomY-40],[cfg.x.FLS,bottomY]]);
+  }
+
+  const runCandidates = ['X','T','FR','MC1','MC2'].map(k=>cfg.x[k]).filter(v=>v!=null).sort((a,b)=>a-b);
+  const runStart = runCandidates.length ? runCandidates[0] : leftX+400;
+  const runEnd = runCandidates.length ? runCandidates[runCandidates.length-1] : cfg.rightX-80;
+  add('g-run-bus','runbus',[[runStart,runBusY],[runEnd,runBusY]]);
+
+  ['X','T','MC1','MC2','RL','GL'].forEach(label=>{
+    const x = cfg.x[label];
+    if(x==null) return;
+    const key = label.toLowerCase();
+    if(label==='X'){
+      add('g-x', key, [[x,topY],[x,bottomY-100]]);
+      add('g-x-ret', key, [[x,bottomY-40],[x,bottomY]]);
+      return;
+    }
+    add(`g-${key}`, key, [[x,runBusY],[x,bottomY-100]]);
+    add(`g-${key}-ret`, key, [[x,bottomY-40],[x,bottomY]]);
+  });
+
+  return segs;
 }
-
-const OVERLAY_SVGNS = 'http://www.w3.org/2000/svg';
-let overlayBuiltFor = null;
-let overlayWireEls = {}, overlayCoilEls = {}, overlayFrEls = {}, overlayCustomEls = {}, overlayLeftPowerEls = {};
-
-
-// ============================================================
-// 좌측 주회로(1~18 공통 기반) 실제 배선 추적 오버레이
-// - 공개도면 공통 좌측 전력부(MCCB/EOCR/MC1/MC2/M1/M2) 중심
-// - MC1/MC2 여자 상태에 맞춰 좌측 주회로 전류 흐름 표시
-// ============================================================
-const LEFT_POWER_REAL_FLOW = [
-  // 도면 1 기준 실측 좌표 보정: 기존보다 오른쪽/아래로 맞춤
-  // TB1 -> MCCB -> EOCR 입력부 : MCCB는 항상 ON으로 가정하므로 상시 통전
-  {id:'lp-l1-src', state:'sourcePower', points:[[145,255],[145,307],[145,337],[145,426]]},
-  {id:'lp-l2-src', state:'sourcePower', points:[[186,255],[186,307],[186,337],[186,426]]},
-  {id:'lp-l3-src', state:'sourcePower', points:[[226,255],[226,307],[226,337],[226,426]]},
-
-  // EOCR 통과 후 MC1/MC2 주접점 상단까지 : 주접점 전단은 상시 통전
-  {id:'lp-l1-pre', state:'sourcePower', points:[[145,426],[145,480],[145,568]]},
-  {id:'lp-l2-pre', state:'sourcePower', points:[[186,426],[186,480],[186,568]]},
-  {id:'lp-l3-pre', state:'sourcePower', points:[[226,426],[226,480],[226,568]]},
-
-  // FUSE 상/하단 제어전원 : MCCB ON 상태에서 항상 통전
-  // 상단 FUSE -> 제어회로 상단 전원
-  {id:'lp-fuse-top', state:'fusePower', points:[[145,366],[331,366],[372,366],[489,366],[489,292],[593,292]]},
-  // 하단 FUSE -> 제어회로 하단 공통선
-  {id:'lp-fuse-bot', state:'fusePower', points:[[226,400],[331,400],[372,400],[489,400],[489,820],[593,820]]},
-
-  // MC1 정회전 가지 -> TB2 -> M1
-  {id:'lp-mc1-l1', state:'mc1Power', points:[[145,568],[145,608],[145,738],[145,774]]},
-  {id:'lp-mc1-l2', state:'mc1Power', points:[[186,568],[186,608],[186,738],[186,774]]},
-  {id:'lp-mc1-l3', state:'mc1Power', points:[[226,568],[226,608],[226,738],[226,774]]},
-
-  // MC2 역회전 입력 교차배선 -> 주접점 상단
-  {id:'lp-mc2-feed1', state:'sourcePower', points:[[267,480],[267,486],[370,486],[370,568]]},
-  {id:'lp-mc2-feed2', state:'sourcePower', points:[[226,506],[330,506],[330,568]]},
-  {id:'lp-mc2-feed3', state:'sourcePower', points:[[186,526],[289,526],[289,568]]},
-
-  // MC2 역회전 가지 -> TB3 -> M2
-  {id:'lp-mc2-l1', state:'mc2Power', points:[[289,568],[289,608],[289,738],[289,774]]},
-  {id:'lp-mc2-l2', state:'mc2Power', points:[[330,568],[330,608],[330,738],[330,774]]},
-  {id:'lp-mc2-l3', state:'mc2Power', points:[[370,568],[370,608],[370,738],[370,774]]},
-];
-
-function leftPowerStates(){
-  const mc1 = !!plc.get('P00022');
-  const mc2 = !!plc.get('P00023');
-  return {
-    sourcePower: true,   // MCCB ON 상시
-    fusePower: true,     // FUSE 전후 제어전원 상시
-    mc1Power: mc1,
-    mc2Power: mc2,
-  };
-}
-
-// ============================================================
-// 도면 1 실제 배선 추적 오버레이
-// - 원본 1754x1240 좌표계에 맞춰 검은 배선의 꺾임을 그대로 따라감
-// - PLC 계산은 기존 NEW_DIAGRAMS/PLC 엔진을 그대로 사용
-// - 2~18번은 기존 세로선 오버레이 방식 유지
-// ============================================================
-const DIAGRAM1_REAL_FLOW = [
-  // 전원/공통 버스
-  {id:'feed-pre',       state:'controlPower', points:[[489,292],[593,292]]},
-  {id:'feed-normal',    state:'eocrNormal',   points:[[593,292],[1570,292]]},
-  {id:'return-bus',     state:'controlPower', points:[[489,820],[1570,820]]},
-
-  // EOCR 트립 표시/FR 점멸 계통 (원본 좌측 가지)
-  {id:'trip-feed',      state:'tripAny',      points:[[593,292],[593,490],[674,490],[674,610]]},
-  {id:'fr-coil-feed',   state:'fr',           points:[[674,610],[674,720]]},
-  {id:'fr-return',      state:'fr',           points:[[674,780],[674,820]]},
-  {id:'yl-feed',        state:'yl',           points:[[674,610],[755,610],[755,720]]},
-  {id:'yl-return',      state:'yl',           points:[[755,780],[755,820]]},
-  {id:'bz-feed',        state:'bz',           points:[[674,610],[837,610],[837,720]]},
-  {id:'bz-return',      state:'bz',           points:[[837,780],[837,820]]},
-
-  // FLS 입력 표시 가지
-  {id:'fls-ind-feed',   state:'fls',          points:[[1081,490],[919,490],[919,720]]},
-  {id:'fls-ind-return', state:'fls',          points:[[919,780],[919,820]]},
-
-  // 자동(A) : SS(A) -> FLS -> X
-  {id:'auto-x-feed',    state:'x',            points:[[1081,292],[1081,720]]},
-  {id:'x-return',       state:'x',            points:[[1081,780],[1081,820]]},
-
-  // 수동(M) : SS(M) -> PB0 -> PB1 또는 자기유지 접점
-  {id:'manual-common',  state:'manualRun',    points:[[1163,292],[1163,490]]},
-  {id:'manual-pb1',     state:'manualPB1',    points:[[1163,490],[1163,610]]},
-  {id:'manual-hold',    state:'manualHold',   points:[[1163,490],[1244,490],[1244,610],[1163,610]]},
-
-  // 자동 X 접점이 운전 버스를 직접 공급하는 가지
-  {id:'x-contact-feed', state:'autoRun',      points:[[1326,292],[1326,610]]},
-
-  // 운전 공통선 및 T/MC1/MC2
-  {id:'run-bus',        state:'runBus',       points:[[1163,610],[1407,610]]},
-  {id:'t-coil-feed',    state:'t',            points:[[1163,610],[1163,720]]},
-  {id:'t-return',       state:'t',            points:[[1163,780],[1163,820]]},
-  {id:'mc1-feed',       state:'mc1',          points:[[1326,610],[1326,720]]},
-  {id:'mc1-return',     state:'mc1',          points:[[1326,780],[1326,820]]},
-  {id:'mc2-feed',       state:'mc2',          points:[[1407,610],[1407,720]]},
-  {id:'mc2-return',     state:'mc2',          points:[[1407,780],[1407,820]]},
-
-  // MC1/MC2 보조접점 -> 표시등 RL/GL
-  {id:'rl-feed',        state:'mc1',          points:[[1489,292],[1489,720]]},
-  {id:'rl-return',      state:'mc1',          points:[[1489,780],[1489,820]]},
-  {id:'gl-feed',        state:'mc2',          points:[[1570,292],[1570,720]]},
-  {id:'gl-return',      state:'mc2',          points:[[1570,780],[1570,820]]},
-];
-
-function diagram1FlowStates(){
-  const t0 = plc.timers['T0000'];
-  const t1 = plc.timers['T0001'];
-  const fr  = !!(t0 && t0.en);
-  const t   = !!(t1 && t1.en);
-  const yl  = !!plc.get('P00020');
-  const bz  = !!plc.get('P00021');
-  const x   = !!plc.get('M00000');
-  const hold= !!plc.get('M00001');
-  const mc1 = !!plc.get('P00022');
-  const mc2 = !!plc.get('P00023');
-  const fls = !!ui.fls;
-  const controlPower = true;
-  const eocrNormal = !ui.eocr;
-
-  // 실제 운전 공통선에 부하가 붙어 있는 동안만 전류 입자를 표시
-  const runBus = t || mc1 || mc2;
-  const manualRun = !ui.eocr && !ui.ss && !ui.pb0 && runBus;
-  const manualPB1 = manualRun && !!ui.pb1;
-  const manualHold = manualRun && !ui.pb1 && hold;
-  const autoRun = !ui.eocr && x && runBus;
-  const tripAny = fr || yl || bz;
-  const normalAny = x || fls || runBus || mc1 || mc2;
-  const any = tripAny || normalAny;
-
-  return { controlPower, eocrNormal, any, normalAny, tripAny, fr, yl, bz, fls, x, t, mc1, mc2,
-           runBus, manualRun, manualPB1, manualHold, autoRun };
-}
-
 
 function generic19FlowStates(dnum, cfg){
   const st = {
@@ -611,10 +674,73 @@ function generic19FlowStates(dnum, cfg){
   return st;
 }
 
+
+function nearestOverlayLabel(cfg, x){
+  let best=null, dist=1e9;
+  Object.entries(cfg.x).forEach(([label,lx])=>{ const d=Math.abs(lx-x); if(d<dist){dist=d;best=label;} });
+  return dist<=4 ? best : null;
+}
+function buildDetectedWireFlow(dnum,cfg){
+  const g=DETECTED_WIRE_GEOMETRY[String(dnum)];
+  if(!g) return [];
+  const segs=[];
+  g.v.forEach((v,i)=>{
+    const label=nearestOverlayLabel(cfg,v[0]);
+    if(label) segs.push({id:`d-v-${i}`,state:`label:${label}`,points:[[v[0],v[1]],[v[0],v[2]]]});
+    else if(Math.abs(v[0]-511)<=4) segs.push({id:`d-v-${i}`,state:'returnActive',points:[[v[0],v[1]],[v[0],v[2]]]});
+  });
+  g.h.forEach((h,i)=>{
+    const y=h[0], x1=h[1], x2=h[2];
+    let state='ends:';
+    // 중간 수평선은 '선 아래에 있는 출력 하나라도 ON' 방식으로 켜지지 않게 한다.
+    // 원본 도면의 양 끝 분기/세로선에 가장 가까운 기기 상태를 각각 찾아,
+    // 두 쪽이 실제로 살아 있을 때만 수평 구간을 통전 표시한다.
+    const entries=Object.entries(cfg.x);
+    const near=(x)=>{
+      let best=null,dist=1e9;
+      entries.forEach(([l,lx])=>{ const d=Math.abs(lx-x); if(d<dist){dist=d;best=l;} });
+      return dist<=105?best:null;
+    };
+    const a=near(x1), b=near(x2);
+    // 상단 전원모선/하단 공통선은 회로 전체 전원 상태로 취급
+    if(y<320) state='eocrn';
+    else if(y>800) state='returnActive';
+    else state += [a,b].filter(Boolean).join(',');
+    segs.push({id:`d-h-${i}`,state,points:[[x1,y],[x2,y]]});
+  });
+  return segs;
+}
+// 원본 도면상 선이 겹쳐 보이지만 전기적으로 이어진 통전 경로가 아닌 구간.
+// 이미지 선 검출만으로는 접점/교차/비접속을 구분할 수 없으므로 도면별 예외를 명시한다.
+const OVERLAY_NEVER_ENERGIZE = {};
+
+function detectedLoadAny(dnum,cfg){
+  const labels = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
+  return labels.some(label=>overlayTerminalOn(dlrResolve(dnum,label)));
+}
+function detectedFlowState(dnum,cfg,state){
+  if(state==='controlPower') return true;
+  if(state==='returnActive') return detectedLoadAny(dnum,cfg);
+  if(state==='eocrn') return !ui.eocr;
+  if(state.startsWith('label:')){
+    const label=state.slice(6); return overlayTerminalOn(dlrResolve(dnum,label));
+  }
+  if(state.startsWith('labels:')){
+    const labels=state.slice(7).split(',').filter(Boolean);
+    return labels.some(label=>overlayTerminalOn(dlrResolve(dnum,label)));
+  }
+  if(state.startsWith('ends:')){
+    const labels=state.slice(5).split(',').filter(Boolean);
+    if(labels.length<2) return false;
+    return labels.every(label=>overlayTerminalOn(dlrResolve(dnum,label)));
+  }
+  return false;
+}
+
 function buildOverlayFor(dnum, cfg){
   const svg = document.getElementById('diagramOverlay');
   svg.innerHTML = '';
-  overlayWireEls = {}; overlayCoilEls = {}; overlayFrEls = {}; overlayCustomEls = {}; overlayLeftPowerEls = {};
+  overlayWireEls = {}; overlayCoilEls = {}; overlayFrEls = {}; overlayCustomEls = {}; overlayLeftPowerEls = {}; overlayGroundEls = {};
 
   const makeLine = (x1,y1,x2,y2,cls)=>{
     const el = document.createElementNS(OVERLAY_SVGNS,'line');
@@ -643,6 +769,9 @@ function buildOverlayFor(dnum, cfg){
   LEFT_POWER_REAL_FLOW.forEach(seg=>{
     overlayLeftPowerEls[seg.id] = { el:makePath(seg.points,'wire'), state:seg.state };
   });
+  LEFT_POWER_GROUND_FLOW.forEach(seg=>{
+    overlayGroundEls[seg.id] = makePath(seg.points,'ground-wire on');
+  });
 
   // 도면 1: 원본 검은 배선을 따라가는 실제 경로 오버레이
   if(String(dnum)==='1'){
@@ -659,46 +788,21 @@ function buildOverlayFor(dnum, cfg){
     return;
   }
 
-  // 도면 2~18: 원본 이미지에서 실제 검은 배선을 픽셀 단위로 추적한
-  // DIAGRAM_REAL_FLOW 데이터를 그대로 사용 (도면마다 실제 회로 구조가
-  // 다르므로 도면별로 좌표/굴곡이 모두 다르게 반영됨)
+  // 도면 2~18: 기준 파일(panel-beta-modular-fixed-1)의 실제 보조회로 경로를 사용
   const flow = DIAGRAM_REAL_FLOW[String(dnum)];
   if(flow){
     const labels = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
-    // 상단 공통선(EOCR 정상일 때 통전) / 하단 공통 리턴선(상시 통전)
-    overlayCustomEls['g-top-bus'] = { el: makePath([[cfg.leftX,flow.topY],[cfg.rightX,flow.topY]], 'wire'), state:'eocrn' };
-    overlayCustomEls['g-bottom-bus'] = { el: makePath([[cfg.leftX,flow.bottomY],[cfg.rightX,flow.bottomY]], 'wire'), state:'controlPower' };
+    overlayCustomEls['g-top-bus']={el:makePath([[cfg.leftX,flow.topY],[cfg.rightX,flow.topY]],'wire'),state:'eocrn'};
+    overlayCustomEls['g-bottom-bus']={el:makePath([[cfg.leftX,flow.bottomY],[cfg.rightX,flow.bottomY]],'wire'),state:'runbus'};
     labels.forEach(label=>{
-      const pts = flow.paths[label];
-      if(!pts) return;
-      const key = label.toLowerCase();
-      const coilX = pts[0][0];
-      // 상단 공통선 -> 코일/표시등까지 실제 배선 경로
-      overlayCustomEls[`g-${key}-feed`] = { el: makePath(pts, 'wire'), state:key };
-      // 코일/표시등 -> 하단 공통 리턴선
-      overlayCustomEls[`g-${key}-ret`] = { el: makeLine(coilX, cfg.coilY+30, coilX, flow.bottomY, 'wire'), state:key };
-      overlayCoilEls[label] = makeCircle(coilX, cfg.coilY, 30, 'coil-ring');
+      const pts=flow.paths[label]; if(!pts) return;
+      const key=label.toLowerCase(), coilX=pts[0][0];
+      overlayCustomEls[`g-${key}-feed`]={el:makePath(pts,'wire'),state:key};
+      overlayCustomEls[`g-${key}-ret`]={el:makeLine(coilX,cfg.coilY+30,coilX,flow.bottomY,'wire'),state:key};
+      overlayCoilEls[label]=makeCircle(coilX,cfg.coilY,30,'coil-ring');
     });
-    (cfg.frContacts||[]).forEach(f=>{
-      overlayFrEls[f.label] = makeLine(f.x, f.y1, f.x, f.y2, 'fr-contact');
-    });
-    overlayBuiltFor = dnum;
-    return;
+    (cfg.frContacts||[]).forEach(f=>overlayFrEls[f.label]=makeLine(f.x,f.y1,f.x,f.y2,'fr-contact'));
   }
-
-  // (fallback) 실측 데이터가 없는 도면: 기존 단순 직선 방식
-  makeLine(cfg.leftX, cfg.railY-90, cfg.leftX, cfg.railY, 'rail on');
-  makeLine(cfg.leftX, cfg.railY, cfg.rightX, cfg.railY, 'rail on');
-  const labels2 = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
-  labels2.forEach(label=>{
-    const x = cfg.x[label];
-    if(x==null) return;
-    overlayWireEls[label] = makeLine(x, cfg.railY, x, cfg.coilY, 'wire');
-    overlayCoilEls[label] = makeCircle(x, cfg.coilY, 30, 'coil-ring');
-  });
-  (cfg.frContacts||[]).forEach(f=>{
-    overlayFrEls[f.label] = makeLine(f.x, f.y1, f.x, f.y2, 'fr-contact');
-  });
   overlayBuiltFor = dnum;
 }
 
@@ -742,36 +846,15 @@ function updateDiagramOverlay(){
     return;
   }
 
-  // 도면 2~18: 실제 배선 추적(DIAGRAM_REAL_FLOW) 결과로 표시
+  // 도면 2~18: 기준 파일의 실제 경로별 상태 반영
   if(DIAGRAM_REAL_FLOW[String(dnum)]){
-    const st = generic19FlowStates(dnum, cfg);
-    Object.values(overlayCustomEls).forEach(item=>{
-      item.el.classList.toggle('on', !!st[item.state]);
-    });
-    const labels = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
-    labels.forEach(label=>{
-      const on = overlayTerminalOn(dlrResolve(dnum, label));
-      overlayCoilEls[label]?.classList.toggle('on', !!on);
-    });
-    (cfg.frContacts||[]).forEach(f=>{
-      const on = !!plc.get(f.addr);
-      overlayFrEls[f.label]?.classList.toggle('on', on);
-    });
-    return;
+    const st=generic19FlowStates(dnum,cfg);
+    Object.values(overlayCustomEls).forEach(item=>item.el.classList.toggle('on',!!st[item.state]));
+    const labels=DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
+    labels.forEach(label=>overlayCoilEls[label]?.classList.toggle('on',!!overlayTerminalOn(dlrResolve(dnum,label))));
+    (cfg.frContacts||[]).forEach(f=>overlayFrEls[f.label]?.classList.toggle('on',!!plc.get(f.addr)));
   }
 
-  // (fallback) 실측 데이터가 없는 도면: 기존 단순 직선 방식
-  const labels = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
-  labels.forEach(label=>{
-    if(cfg.x[label]==null) return;
-    const on = overlayTerminalOn(dlrResolve(dnum, label));
-    overlayWireEls[label].classList.toggle('on', on);
-    overlayCoilEls[label].classList.toggle('on', on);
-  });
-  (cfg.frContacts||[]).forEach(f=>{
-    const on = !!plc.get(f.addr);
-    overlayFrEls[f.label].classList.toggle('on', on);
-  });
 }
 
 function execute(program, master){
