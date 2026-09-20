@@ -246,9 +246,11 @@ const LEFT_POWER_REAL_FLOW = [
 
   // FUSE 상/하단 제어전원 : MCCB ON 상태에서 항상 통전
   // 상단 FUSE -> 제어회로 상단 전원
-  {id:'lp-fuse-top', state:'fusePower', points:[[145,366],[331,366],[372,366],[489,366],[489,292],[593,292]]},
+  {id:'lp-fuse-top-in', state:'fusePower', points:[[145,366],[331,366]]},
+  {id:'lp-fuse-top-out', state:'fusePower', points:[[372,366],[489,366],[489,292],[593,292]]},
   // 하단 FUSE -> 제어회로 하단 공통선
-  {id:'lp-fuse-bot', state:'fusePower', points:[[226,400],[331,400],[372,400],[489,400],[489,820],[593,820]]},
+  {id:'lp-fuse-bot-in', state:'fusePower', points:[[226,400],[331,400]]},
+  {id:'lp-fuse-bot-out', state:'fusePower', points:[[372,400],[489,400],[489,820],[593,820]]},
 
   // MC1 정회전 가지 -> TB2 -> M1
   {id:'lp-mc1-l1', state:'mc1Power', points:[[145,568],[145,608],[145,738],[145,774]]},
@@ -256,14 +258,14 @@ const LEFT_POWER_REAL_FLOW = [
   {id:'lp-mc1-l3', state:'mc1Power', points:[[226,568],[226,608],[226,738],[226,774]]},
 
   // MC2 역회전 입력 교차배선 -> 주접점 상단
-  {id:'lp-mc2-feed1', state:'sourcePower', points:[[267,480],[267,486],[370,486],[370,568]]},
-  {id:'lp-mc2-feed2', state:'sourcePower', points:[[226,506],[330,506],[330,568]]},
-  {id:'lp-mc2-feed3', state:'sourcePower', points:[[186,526],[289,526],[289,568]]},
+  {id:'lp-mc2-feed1', state:'sourcePower', points:[[267,480],[267,486],[370,486],[370,568],[370,608]]},
+  {id:'lp-mc2-feed2', state:'sourcePower', points:[[226,506],[330,506],[330,568],[330,608]]},
+  {id:'lp-mc2-feed3', state:'sourcePower', points:[[186,526],[289,526],[289,568],[289,608]]},
 
   // MC2 역회전 가지 -> TB3 -> M2
-  {id:'lp-mc2-l1', state:'mc2Power', points:[[289,568],[289,608],[289,738],[289,774]]},
-  {id:'lp-mc2-l2', state:'mc2Power', points:[[330,568],[330,608],[330,738],[330,774]]},
-  {id:'lp-mc2-l3', state:'mc2Power', points:[[370,568],[370,608],[370,738],[370,774]]},
+  {id:'lp-mc2-l1', state:'mc2Power', points:[[289,608],[289,738],[289,774]]},
+  {id:'lp-mc2-l2', state:'mc2Power', points:[[330,608],[330,738],[330,774]]},
+  {id:'lp-mc2-l3', state:'mc2Power', points:[[370,608],[370,738],[370,774]]},
 ];
 
 function leftPowerStates(){
@@ -299,6 +301,7 @@ const DIAGRAM1_REAL_FLOW = [
   {id:'bz-return',      state:'bz',           points:[[837,780],[837,820]]},
 
   // FLS 입력 표시 가지
+  {id:'eocr-mid-to-auto',state:'eocrNormal',   points:[[593,490],[1081,490]]},
   {id:'fls-ind-feed',   state:'fls',          points:[[1081,490],[919,490],[919,720]]},
   {id:'fls-ind-return', state:'fls',          points:[[919,780],[919,820]]},
 
