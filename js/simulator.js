@@ -104,7 +104,7 @@ function updateDiagramLiveRow(){
 // ============================================================
 const OVERLAY_CONFIGS = {
   "1": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1570,
     x: { EOCR:593, FR:674, YL:755, BZ:837, FLS:919, X:1081, T:1163, MC1:1326, MC2:1407, RL:1489, GL:1570 },
     // FR 코일의 두 보조접점(A,B) — YL/BZ 열 위, y 658~702 구간의 실측 접점 위치
     frContacts: [
@@ -113,7 +113,7 @@ const OVERLAY_CONFIGS = {
     ],
   },
   "2": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1570,
     x: { EOCR:593, YL:674, BZ:756, FLS:837, X:1000, T:1081, FR:1244, MC1:1326, MC2:1407, RL:1489, GL:1570 },
     // FR 코일의 두 보조접점 — FR/MC1 열 위, y 658~702 구간의 실측 접점 위치
     frContacts: [
@@ -122,7 +122,7 @@ const OVERLAY_CONFIGS = {
     ],
   },
   "3": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1489,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1489,
     x: { EOCR:593, YL:674, BZ:756, MC1:837, MC2:919, FR:1000, FLS:1081, T:1244, X:1326, RL:1407, GL:1489 },
     frContacts: [
       { label:'FR-1', x:837, y1:658, y2:702, addr:'P00022' }, // → MC1
@@ -130,7 +130,7 @@ const OVERLAY_CONFIGS = {
     ],
   },
   "4": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1570,
     x: { EOCR:593, YL:674, BZ:756, FLS:837, FR:1000, X:1081, MC1:1244, MC2:1326, T:1407, RL:1489, GL:1570 },
     // 이 도면의 "FR" 코일은 실제로는 긴FR(T0003) 타이머를 표시합니다.
     frContacts: [
@@ -139,7 +139,7 @@ const OVERLAY_CONFIGS = {
     ],
   },
   "5": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1570,
     x: { EOCR:593, YL:674, BZ:756, FLS:837, X:1000, T:1081, FR:1163, MC1:1244, MC2:1326, RL:1489, GL:1570 },
     frContacts: [
       { label:'FR-1', x:1244, y1:600, y2:645, addr:'P00022' }, // → MC1
@@ -147,7 +147,7 @@ const OVERLAY_CONFIGS = {
     ],
   },
   "6": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1570,
     x: { EOCR:593, YL:674, BZ:756, FLS:837, X:1000, T:1081, FR:1244, MC1:1326, RL:1407, GL:1489, MC2:1570 },
     frContacts: [
       { label:'FR-1', x:1326, y1:560, y2:605, addr:'P00022' }, // → MC1
@@ -155,7 +155,7 @@ const OVERLAY_CONFIGS = {
     ],
   },
   "7": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1570,
     x: { EOCR:593, YL:674, BZ:756, FLS:837, FR:1000, X:1081, T:1244, MC1:1326, MC2:1407, RL:1489, GL:1570 },
     // 이 도면의 "FR" 코일도 긴FR(T0003) 타이머 표시. 접점 1개가 MC1/MC2로 분기(근사 표시).
     frContacts: [
@@ -163,14 +163,14 @@ const OVERLAY_CONFIGS = {
     ],
   },
   "8": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1570,
     x: { EOCR:593, BZ:674, FLS:755, X:837, FR:1000, YL:1081, T:1163, MC1:1325, MC2:1407, RL:1488, GL:1570 },
     frContacts: [
       { label:'FR-1', x:1000, y1:655, y2:695, addr:'P00020' }, // → YL
     ],
   },
   "9": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1570,
     x: { EOCR:593, FR:674, YL:756, BZ:837, MC1:1000, FLS:1082, X:1244, T:1326, MC2:1407, RL:1489, GL:1570 },
     frContacts: [
       { label:'FR-A', x:756, y1:635, y2:685, addr:'P00020' }, // → YL
@@ -178,40 +178,40 @@ const OVERLAY_CONFIGS = {
     ],
   },
   "10": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1529,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1529,
     // 이 도면은 FR/긴FR을 쓰지 않는 2계통(X1·T1·MC1 / X2·T2·MC2) 구조라 보조접점이 없습니다.
     x: { EOCR:593, YL:674, X1:796, T1:878, MC1:959, X2:1041, T2:1122, MC2:1203, WL:1285, RL:1448, GL:1529 },
   },
   "11": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1529,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1529,
     x: { EOCR:593, YL:674, X1:796, MC1:878, T1:959, X2:1041, MC2:1122, T2:1203, WL:1285, RL:1448, GL:1529 },
   },
   "12": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1529,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1529,
     x: { EOCR:593, YL:674, X1:796, MC1:878, T1:959, X2:1041, MC2:1122, T2:1203, WL:1285, RL:1448, GL:1529 },
   },
   "13": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1529,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1529,
     x: { EOCR:593, YL:674, X1:796, MC1:878, T1:959, X2:1041, MC2:1122, T2:1203, WL:1285, RL:1448, GL:1529 },
   },
   "14": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1448,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1448,
     x: { EOCR:593, YL:674, X1:796, X2:878, MC1:959, T1:1041, RL:1122, MC2:1203, T2:1285, GL:1366, WL:1448 },
   },
   "15": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1529,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1529,
     x: { EOCR:593, YL:674, X1:796, X2:878, MC1:959, T1:1041, RL:1203, MC2:1285, T2:1366, GL:1448, WL:1529 },
   },
   "16": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1529,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1529,
     x: { EOCR:593, YL:674, T1:796, T2:878, MC1:959, X1:1041, RL:1203, MC2:1285, WL:1366, X2:1448, GL:1529 },
   },
   "17": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1448,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1448,
     x: { EOCR:593, YL:674, X1:796, X2:878, MC1:959, T1:1041, RL:1122, MC2:1203, WL:1285, T2:1366, GL:1448 },
   },
   "18": {
-    railY: 292, coilY: 750, leftX: 593, rightX: 1448,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1448,
     x: { EOCR:593, YL:674, X1:796, X2:878, MC1:959, T1:1041, RL:1122, MC2:1203, T2:1285, GL:1366, WL:1448 },
   },
 };
@@ -233,35 +233,35 @@ let overlayWireEls = {}, overlayCoilEls = {}, overlayFrEls = {}, overlayCustomEl
 // - MC1/MC2 여자 상태에 맞춰 좌측 주회로 전류 흐름 표시
 // ============================================================
 const LEFT_POWER_REAL_FLOW = [
-  // 도면 1 기준 실측 좌표 보정: 기존보다 오른쪽/아래로 맞춤
+  // v0.3.16 원본 JPG 실측 재보정: 좌측 주회로/FUSE 꺾임/코일 중심을 검은 원본선에 정렬
   // TB1 -> MCCB -> EOCR 입력부 : MCCB는 항상 ON으로 가정하므로 상시 통전
-  {id:'lp-l1-src', state:'sourcePower', points:[[145,255],[145,307],[145,337],[145,426]]},
-  {id:'lp-l2-src', state:'sourcePower', points:[[186,255],[186,307],[186,337],[186,426]]},
-  {id:'lp-l3-src', state:'sourcePower', points:[[226,255],[226,307],[226,337],[226,426]]},
+  {id:'lp-l1-src', state:'sourcePower', points:[[102,255],[102,307],[102,337],[102,426]]},
+  {id:'lp-l2-src', state:'sourcePower', points:[[145,255],[145,307],[145,337],[145,426]]},
+  {id:'lp-l3-src', state:'sourcePower', points:[[186,255],[186,307],[186,337],[186,426]]},
 
   // EOCR 통과 후 MC1/MC2 주접점 상단까지 : 주접점 전단은 상시 통전
-  {id:'lp-l1-pre', state:'sourcePower', points:[[145,426],[145,480],[145,568]]},
-  {id:'lp-l2-pre', state:'sourcePower', points:[[186,426],[186,480],[186,568]]},
-  {id:'lp-l3-pre', state:'sourcePower', points:[[226,426],[226,480],[226,568]]},
+  {id:'lp-l1-pre', state:'sourcePower', points:[[102,426],[102,480],[102,568]]},
+  {id:'lp-l2-pre', state:'sourcePower', points:[[145,426],[145,480],[145,568]]},
+  {id:'lp-l3-pre', state:'sourcePower', points:[[186,426],[186,480],[186,568]]},
 
   // FUSE 상/하단 제어전원 : MCCB ON 상태에서 항상 통전
   // 상단 FUSE -> 제어회로 상단 전원
-  {id:'lp-fuse-top-in', state:'fusePower', points:[[145,366],[331,366]]},
-  {id:'lp-fuse-top-out', state:'fusePower', points:[[372,366],[489,366],[489,292],[593,292]]},
+  {id:'lp-fuse-top-in', state:'fusePower', points:[[102,373],[331,373]]},
+  {id:'lp-fuse-top-out', state:'fusePower', points:[[372,373],[511,373],[511,292],[593,292]]},
   // 하단 FUSE -> 제어회로 하단 공통선
-  {id:'lp-fuse-bot-in', state:'fusePower', points:[[226,400],[331,400]]},
-  {id:'lp-fuse-bot-out', state:'fusePower', points:[[372,400],[489,400],[489,820],[593,820]]},
+  {id:'lp-fuse-bot-in', state:'fusePower', points:[[186,404],[331,404]]},
+  {id:'lp-fuse-bot-out', state:'fusePower', points:[[372,404],[511,404],[511,822],[593,822]]},
 
   // MC1 정회전 가지 -> TB2 -> M1
-  {id:'lp-mc1-l1', state:'mc1Power', points:[[145,568],[145,608],[145,738],[145,774]]},
-  {id:'lp-mc1-l2', state:'mc1Power', points:[[186,568],[186,608],[186,738],[186,774]]},
-  {id:'lp-mc1-l3', state:'mc1Power', points:[[226,568],[226,608],[226,738],[226,774]]},
+  {id:'lp-mc1-l1', state:'mc1Power', points:[[102,568],[102,608],[102,738],[102,774]]},
+  {id:'lp-mc1-l2', state:'mc1Power', points:[[145,568],[145,608],[145,738],[145,774]]},
+  {id:'lp-mc1-l3', state:'mc1Power', points:[[186,568],[186,608],[186,738],[186,774]]},
 
   // MC2 역회전 입력 교차배선 -> 실제 MC2 주접점 상단(원본 검은선 실측)
   // PE(267)는 상선이 아니므로 MC2 3상에서 제외한다.
-  {id:'lp-mc2-feed1', state:'sourcePower', points:[[145,546],[349,546],[349,568],[349,608]]},
-  {id:'lp-mc2-feed2', state:'sourcePower', points:[[186,526],[390,526],[390,568],[390,608]]},
-  {id:'lp-mc2-feed3', state:'sourcePower', points:[[226,506],[431,506],[431,568],[431,608]]},
+  {id:'lp-mc2-feed1', state:'sourcePower', points:[[102,546],[349,546],[349,568],[349,608]]},
+  {id:'lp-mc2-feed2', state:'sourcePower', points:[[145,526],[390,526],[390,568],[390,608]]},
+  {id:'lp-mc2-feed3', state:'sourcePower', points:[[186,506],[431,506],[431,568],[431,608]]},
 
   // MC2 역회전 가지 -> TB3 -> M2 (MC2 실제 접점 x좌표)
   {id:'lp-mc2-l1', state:'mc2Power', points:[[349,608],[349,738],[349,774]]},
@@ -295,9 +295,9 @@ function leftPowerStates(){
 // ============================================================
 const DIAGRAM1_REAL_FLOW = [
   // 전원/공통 버스
-  {id:'feed-pre',       state:'controlPower', points:[[489,292],[593,292]]},
+  {id:'feed-pre',       state:'controlPower', points:[[511,292],[593,292]]},
   {id:'feed-normal',    state:'eocrNormal',   points:[[593,292],[1570,292]]},
-  {id:'return-bus',     state:'controlPower', points:[[489,820],[1570,820]]},
+  {id:'return-bus',     state:'controlPower', points:[[511,822],[1570,822]]},
 
   // EOCR 트립 표시/FR 점멸 계통 (원본 좌측 가지)
   {id:'trip-feed',      state:'tripAny',      points:[[593,292],[593,490],[674,490],[674,610]]},
