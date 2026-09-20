@@ -1,0 +1,1408 @@
+// ============================================================
+// PLC 명령어(IL) 인터프리터 — 실제 XG5000 프로그램을 그대로 해석 실행
+// ============================================================
+class PLC {
+  constructor(){ this.bits={}; this.prev={}; this.timers={}; }
+  get(d){
+    if(d.endsWith('@EN')){ const t=this.timers[d.slice(0,-3)]; return t ? !!t.en : false; }
+    return !!this.bits[d];
+  }
+  set(d,v){ this.bits[d]=v; }
+}
+const plc = new PLC();
+// T1(T0001)·T2(T0002)는 사용자가 직접 설정시간을 바꿀 수 있게 함 (기본 5.0초 = 50틱)
+// T0(FR)·T3(긴FR) 플리커는 원본 그대로 고정
+const TIMER_OVERRIDE = { T0000: 40, T0001: 50, T0002: 50, T0003: 140 };
+// 원본 IL이 같은 타이머를 물리주소(T0000)와 태그명(FR)을 섞어서 참조하는 경우가 있어 별칭 처리
+const DEVICE_ALIAS = { 'FR':'T0000', '긴FR':'T0003', 'T':'T0001', 'T_2':'T0002' };
+
+// ============================================================
+// 도면 원본 이미지 하단 라벨 순서 그대로 재현한 실시간 상태 행
+// (18개 원본 도면을 직접 열어 하단 동그라미 순서를 확인해 옮긴 것)
+// ============================================================
+const DIAGRAM_ROW_LABELS = {
+  "1": ["EOCR","FR","YL","BZ","FLS","X","T","MC1","MC2","RL","GL"],
+  "2": ["EOCR","YL","BZ","FLS","X","T","FR","MC1","MC2","RL","GL"],
+  "3": ["EOCR","YL","BZ","MC1","MC2","FR","FLS","T","X","RL","GL"],
+  "4": ["EOCR","YL","BZ","FLS","FR","X","MC1","MC2","T","RL","GL"],
+  "5": ["EOCR","YL","BZ","FLS","X","T","FR","MC1","MC2","RL","GL"],
+  "6": ["EOCR","YL","BZ","FLS","X","T","FR","MC1","RL","GL","MC2"],
+  "7": ["EOCR","YL","BZ","FLS","FR","X","T","MC1","MC2","RL","GL"],
+  "8": ["EOCR","BZ","FLS","X","FR","YL","T","MC1","MC2","RL","GL"],
+  "9": ["EOCR","FR","YL","BZ","MC1","FLS","X","T","MC2","RL","GL"],
+  "10": ["EOCR","YL","X1","T1","MC1","X2","T2","MC2","WL","RL","GL"],
+  "11": ["EOCR","YL","X1","MC1","T1","X2","MC2","T2","WL","RL","GL"],
+  "12": ["EOCR","YL","X1","MC1","T1","X2","MC2","T2","WL","RL","GL"],
+  "13": ["EOCR","YL","X1","MC1","T1","X2","MC2","T2","WL","RL","GL"],
+  "14": ["EOCR","YL","X1","X2","MC1","T1","RL","MC2","T2","GL","WL"],
+  "15": ["EOCR","YL","X1","X2","MC1","T1","RL","MC2","T2","GL","WL"],
+  "16": ["EOCR","YL","T1","T2","MC1","X1","RL","MC2","WL","X2","GL"],
+  "17": ["EOCR","YL","X1","X2","MC1","T1","RL","MC2","WL","T2","GL"],
+  "18": ["EOCR","YL","X1","X2","MC1","T1","RL","MC2","T2","GL","WL"],
+};
+const DLR_FIXED = {
+  EOCR:{kind:'eocr'}, YL:{kind:'bit', addr:'P00020'}, BZ:{kind:'bit', addr:'P00021'},
+  FLS:{kind:'bit', addr:'P00004'}, MC1:{kind:'bit', addr:'P00022'}, MC2:{kind:'bit', addr:'P00023'},
+  RL:{kind:'bit', addr:'P00022'}, GL:{kind:'bit', addr:'P00023'}, WL:{kind:'bit', addr:'P00026'},
+  X:{kind:'bit', addr:'M00000'}, X1:{kind:'bit', addr:'M00001'}, X2:{kind:'bit', addr:'M00002'},
+  X3:{kind:'bit', addr:'M00003'}, X4:{kind:'bit', addr:'M00004'},
+};
+function dlrResolve(dnum, label){
+  if(DLR_FIXED[label]) return DLR_FIXED[label];
+  const prog = NEW_DIAGRAMS[String(dnum)] || [];
+  const tonTargets = prog.filter(ins=>ins[0]==='TON').map(ins=> DEVICE_ALIAS[ins[1]] || ins[1]);
+  if(label==='FR'){
+    const t = tonTargets.find(a=>a==='T0000'||a==='T0003');
+    return {kind:'timer', addr: t || 'T0000'};
+  }
+  if(label==='T'){
+    const t = tonTargets.find(a=>a==='T0001');
+    return {kind:'timer', addr: t || 'T0001'};
+  }
+  if(label==='T1') return {kind:'timer', addr:'T0001'};
+  if(label==='T2') return {kind:'timer', addr:'T0002'};
+  return {kind:'bit', addr:label};
+}
+function buildDiagramLiveRow(dnum){
+  const row = document.getElementById('diagramLiveRow');
+  const labels = DIAGRAM_ROW_LABELS[String(dnum)];
+  if(!labels){ row.classList.remove('show'); row.innerHTML=''; row.__dlrItems = null; return; }
+  row.innerHTML = labels.map(l=>`
+    <div class="dlr-unit"><div class="dlr-dot" data-label="${l}">${l}</div></div>
+  `).join('');
+  row.__dlrItems = labels.map(l=> ({label:l, resolved: dlrResolve(dnum, l), el: row.querySelector(`[data-label="${l}"]`)}));
+  row.classList.add('show');
+}
+function updateDiagramLiveRow(){
+  const row = document.getElementById('diagramLiveRow');
+  if(!row || !row.__dlrItems) return;
+  row.__dlrItems.forEach(item=>{
+    const r = item.resolved;
+    let on = false, trip = false;
+    if(r.kind === 'eocr'){
+      trip = !!ui.eocr;
+      on = !trip;
+    } else if(r.kind === 'timer'){
+      const timer = plc.timers[r.addr];
+      on = !!(timer && timer.en);
+    } else {
+      on = !!plc.get(r.addr);
+    }
+    item.el.classList.toggle('on', on && !trip);
+    item.el.classList.toggle('trip', trip);
+  });
+}
+
+// ============================================================
+// 원본 도면 이미지 위 실시간 통전 오버레이 (도면별 설정 기반)
+// 원본 스캔(1754x1240) 이미지에서 직접 픽셀을 실측해 좌표를 구했습니다.
+// 새 도면을 추가하려면: 해당 이미지를 추출해 좌표를 실측한 뒤
+// OVERLAY_CONFIGS에 항목만 추가하면 됩니다. 라벨→비트/타이머 판별은
+// 기존 dlrResolve()를 그대로 재사용하므로 좌표만 있으면 바로 동작합니다.
+// (좌표를 측정하지 않은 도면은 OVERLAY_CONFIGS에 없으므로 오버레이가 자동으로 숨겨지고
+//  기존의 원형 상태표시 줄만 보입니다.)
+// ============================================================
+const OVERLAY_CONFIGS = {
+  "1": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    x: { EOCR:593, FR:674, YL:755, BZ:837, FLS:919, X:1081, T:1163, MC1:1326, MC2:1407, RL:1489, GL:1570 },
+    // FR 코일의 두 보조접점(A,B) — YL/BZ 열 위, y 658~702 구간의 실측 접점 위치
+    frContacts: [
+      { label:'FR-A', x:755, y1:658, y2:702, addr:'P00020' }, // FR-A → YL
+      { label:'FR-B', x:837, y1:658, y2:702, addr:'P00021' }, // FR-B → BZ
+    ],
+  },
+  "2": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    x: { EOCR:593, YL:674, BZ:756, FLS:837, X:1000, T:1081, FR:1244, MC1:1326, MC2:1407, RL:1489, GL:1570 },
+    // FR 코일의 두 보조접점 — FR/MC1 열 위, y 658~702 구간의 실측 접점 위치
+    frContacts: [
+      { label:'FR-1', x:1244, y1:658, y2:702, addr:'P00022' }, // → MC1
+      { label:'FR-2', x:1326, y1:658, y2:702, addr:'P00023' }, // → MC2
+    ],
+  },
+  "3": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1489,
+    x: { EOCR:593, YL:674, BZ:756, MC1:837, MC2:919, FR:1000, FLS:1081, T:1244, X:1326, RL:1407, GL:1489 },
+    frContacts: [
+      { label:'FR-1', x:837, y1:658, y2:702, addr:'P00022' }, // → MC1
+      { label:'FR-2', x:919, y1:658, y2:702, addr:'P00023' }, // → MC2
+    ],
+  },
+  "4": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    x: { EOCR:593, YL:674, BZ:756, FLS:837, FR:1000, X:1081, MC1:1244, MC2:1326, T:1407, RL:1489, GL:1570 },
+    // 이 도면의 "FR" 코일은 실제로는 긴FR(T0003) 타이머를 표시합니다.
+    frContacts: [
+      { label:'FR-1', x:1244, y1:535, y2:578, addr:'P00022' }, // → MC1
+      { label:'FR-2', x:1326, y1:535, y2:578, addr:'P00023' }, // → MC2
+    ],
+  },
+  "5": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    x: { EOCR:593, YL:674, BZ:756, FLS:837, X:1000, T:1081, FR:1163, MC1:1244, MC2:1326, RL:1489, GL:1570 },
+    frContacts: [
+      { label:'FR-1', x:1244, y1:600, y2:645, addr:'P00022' }, // → MC1
+      { label:'FR-2', x:1326, y1:600, y2:645, addr:'P00023' }, // → MC2
+    ],
+  },
+  "6": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    x: { EOCR:593, YL:674, BZ:756, FLS:837, X:1000, T:1081, FR:1244, MC1:1326, RL:1407, GL:1489, MC2:1570 },
+    frContacts: [
+      { label:'FR-1', x:1326, y1:560, y2:605, addr:'P00022' }, // → MC1
+      { label:'FR-2', x:1570, y1:560, y2:605, addr:'P00023' }, // → MC2
+    ],
+  },
+  "7": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    x: { EOCR:593, YL:674, BZ:756, FLS:837, FR:1000, X:1081, T:1244, MC1:1326, MC2:1407, RL:1489, GL:1570 },
+    // 이 도면의 "FR" 코일도 긴FR(T0003) 타이머 표시. 접점 1개가 MC1/MC2로 분기(근사 표시).
+    frContacts: [
+      { label:'FR-1', x:1163, y1:540, y2:580, addr:'P00022' },
+    ],
+  },
+  "8": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    x: { EOCR:593, BZ:674, FLS:755, X:837, FR:1000, YL:1081, T:1163, MC1:1325, MC2:1407, RL:1488, GL:1570 },
+    frContacts: [
+      { label:'FR-1', x:1000, y1:655, y2:695, addr:'P00020' }, // → YL
+    ],
+  },
+  "9": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1570,
+    x: { EOCR:593, FR:674, YL:756, BZ:837, MC1:1000, FLS:1082, X:1244, T:1326, MC2:1407, RL:1489, GL:1570 },
+    frContacts: [
+      { label:'FR-A', x:756, y1:635, y2:685, addr:'P00020' }, // → YL
+      { label:'FR-B', x:837, y1:635, y2:685, addr:'P00021' }, // → BZ
+    ],
+  },
+  "10": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1529,
+    // 이 도면은 FR/긴FR을 쓰지 않는 2계통(X1·T1·MC1 / X2·T2·MC2) 구조라 보조접점이 없습니다.
+    x: { EOCR:593, YL:674, X1:796, T1:878, MC1:959, X2:1041, T2:1122, MC2:1203, WL:1285, RL:1448, GL:1529 },
+  },
+  "11": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1529,
+    x: { EOCR:593, YL:674, X1:796, MC1:878, T1:959, X2:1041, MC2:1122, T2:1203, WL:1285, RL:1448, GL:1529 },
+  },
+  "12": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1529,
+    x: { EOCR:593, YL:674, X1:796, MC1:878, T1:959, X2:1041, MC2:1122, T2:1203, WL:1285, RL:1448, GL:1529 },
+  },
+  "13": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1529,
+    x: { EOCR:593, YL:674, X1:796, MC1:878, T1:959, X2:1041, MC2:1122, T2:1203, WL:1285, RL:1448, GL:1529 },
+  },
+  "14": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1448,
+    x: { EOCR:593, YL:674, X1:796, X2:878, MC1:959, T1:1041, RL:1122, MC2:1203, T2:1285, GL:1366, WL:1448 },
+  },
+  "15": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1529,
+    x: { EOCR:593, YL:674, X1:796, X2:878, MC1:959, T1:1041, RL:1203, MC2:1285, T2:1366, GL:1448, WL:1529 },
+  },
+  "16": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1529,
+    x: { EOCR:593, YL:674, T1:796, T2:878, MC1:959, X1:1041, RL:1203, MC2:1285, WL:1366, X2:1448, GL:1529 },
+  },
+  "17": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1448,
+    x: { EOCR:593, YL:674, X1:796, X2:878, MC1:959, T1:1041, RL:1122, MC2:1203, WL:1285, T2:1366, GL:1448 },
+  },
+  "18": {
+    railY: 292, coilY: 750, leftX: 593, rightX: 1448,
+    x: { EOCR:593, YL:674, X1:796, X2:878, MC1:959, T1:1041, RL:1122, MC2:1203, T2:1285, GL:1366, WL:1448 },
+  },
+};
+
+function overlayTerminalOn(resolved){
+  if(resolved.kind==='eocr') return !ui.eocr;
+  if(resolved.kind==='timer'){ const tm = plc.timers[resolved.addr]; return !!(tm && tm.en); }
+  return !!plc.get(resolved.addr);
+}
+
+const OVERLAY_SVGNS = 'http://www.w3.org/2000/svg';
+let overlayBuiltFor = null;
+let overlayWireEls = {}, overlayCoilEls = {}, overlayFrEls = {}, overlayCustomEls = {}, overlayLeftPowerEls = {};
+
+
+// ============================================================
+// 좌측 주회로(1~18 공통 기반) 실제 배선 추적 오버레이
+// - 공개도면 공통 좌측 전력부(MCCB/EOCR/MC1/MC2/M1/M2) 중심
+// - MC1/MC2 여자 상태에 맞춰 좌측 주회로 전류 흐름 표시
+// ============================================================
+const LEFT_POWER_REAL_FLOW = [
+  // 도면 1 기준 실측 좌표 보정: 기존보다 오른쪽/아래로 맞춤
+  // TB1 -> MCCB -> EOCR 입력부 : MCCB는 항상 ON으로 가정하므로 상시 통전
+  {id:'lp-l1-src', state:'sourcePower', points:[[145,255],[145,307],[145,337],[145,426]]},
+  {id:'lp-l2-src', state:'sourcePower', points:[[186,255],[186,307],[186,337],[186,426]]},
+  {id:'lp-l3-src', state:'sourcePower', points:[[226,255],[226,307],[226,337],[226,426]]},
+
+  // EOCR 통과 후 MC1/MC2 주접점 상단까지 : 주접점 전단은 상시 통전
+  {id:'lp-l1-pre', state:'sourcePower', points:[[145,426],[145,480],[145,568]]},
+  {id:'lp-l2-pre', state:'sourcePower', points:[[186,426],[186,480],[186,568]]},
+  {id:'lp-l3-pre', state:'sourcePower', points:[[226,426],[226,480],[226,568]]},
+
+  // FUSE 상/하단 제어전원 : MCCB ON 상태에서 항상 통전
+  // 상단 FUSE -> 제어회로 상단 전원
+  {id:'lp-fuse-top', state:'fusePower', points:[[145,366],[331,366],[372,366],[489,366],[489,292],[593,292]]},
+  // 하단 FUSE -> 제어회로 하단 공통선
+  {id:'lp-fuse-bot', state:'fusePower', points:[[226,400],[331,400],[372,400],[489,400],[489,820],[593,820]]},
+
+  // MC1 정회전 가지 -> TB2 -> M1
+  {id:'lp-mc1-l1', state:'mc1Power', points:[[145,568],[145,608],[145,738],[145,774]]},
+  {id:'lp-mc1-l2', state:'mc1Power', points:[[186,568],[186,608],[186,738],[186,774]]},
+  {id:'lp-mc1-l3', state:'mc1Power', points:[[226,568],[226,608],[226,738],[226,774]]},
+
+  // MC2 역회전 입력 교차배선 -> 주접점 상단
+  {id:'lp-mc2-feed1', state:'sourcePower', points:[[267,480],[267,486],[370,486],[370,568]]},
+  {id:'lp-mc2-feed2', state:'sourcePower', points:[[226,506],[330,506],[330,568]]},
+  {id:'lp-mc2-feed3', state:'sourcePower', points:[[186,526],[289,526],[289,568]]},
+
+  // MC2 역회전 가지 -> TB3 -> M2
+  {id:'lp-mc2-l1', state:'mc2Power', points:[[289,568],[289,608],[289,738],[289,774]]},
+  {id:'lp-mc2-l2', state:'mc2Power', points:[[330,568],[330,608],[330,738],[330,774]]},
+  {id:'lp-mc2-l3', state:'mc2Power', points:[[370,568],[370,608],[370,738],[370,774]]},
+];
+
+function leftPowerStates(){
+  const mc1 = !!plc.get('P00022');
+  const mc2 = !!plc.get('P00023');
+  return {
+    sourcePower: true,   // MCCB ON 상시
+    fusePower: true,     // FUSE 전후 제어전원 상시
+    mc1Power: mc1,
+    mc2Power: mc2,
+  };
+}
+
+// ============================================================
+// 도면 1 실제 배선 추적 오버레이
+// - 원본 1754x1240 좌표계에 맞춰 검은 배선의 꺾임을 그대로 따라감
+// - PLC 계산은 기존 NEW_DIAGRAMS/PLC 엔진을 그대로 사용
+// - 2~18번은 기존 세로선 오버레이 방식 유지
+// ============================================================
+const DIAGRAM1_REAL_FLOW = [
+  // 전원/공통 버스
+  {id:'feed-pre',       state:'controlPower', points:[[489,292],[593,292]]},
+  {id:'feed-normal',    state:'eocrNormal',   points:[[593,292],[1570,292]]},
+  {id:'return-bus',     state:'controlPower', points:[[489,820],[1570,820]]},
+
+  // EOCR 트립 표시/FR 점멸 계통 (원본 좌측 가지)
+  {id:'trip-feed',      state:'tripAny',      points:[[593,292],[593,490],[674,490],[674,610]]},
+  {id:'fr-coil-feed',   state:'fr',           points:[[674,610],[674,720]]},
+  {id:'fr-return',      state:'fr',           points:[[674,780],[674,820]]},
+  {id:'yl-feed',        state:'yl',           points:[[674,610],[755,610],[755,720]]},
+  {id:'yl-return',      state:'yl',           points:[[755,780],[755,820]]},
+  {id:'bz-feed',        state:'bz',           points:[[674,610],[837,610],[837,720]]},
+  {id:'bz-return',      state:'bz',           points:[[837,780],[837,820]]},
+
+  // FLS 입력 표시 가지
+  {id:'fls-ind-feed',   state:'fls',          points:[[1081,490],[919,490],[919,720]]},
+  {id:'fls-ind-return', state:'fls',          points:[[919,780],[919,820]]},
+
+  // 자동(A) : SS(A) -> FLS -> X
+  {id:'auto-x-feed',    state:'x',            points:[[1081,292],[1081,720]]},
+  {id:'x-return',       state:'x',            points:[[1081,780],[1081,820]]},
+
+  // 수동(M) : SS(M) -> PB0 -> PB1 또는 자기유지 접점
+  {id:'manual-common',  state:'manualRun',    points:[[1163,292],[1163,490]]},
+  {id:'manual-pb1',     state:'manualPB1',    points:[[1163,490],[1163,610]]},
+  {id:'manual-hold',    state:'manualHold',   points:[[1163,490],[1244,490],[1244,610],[1163,610]]},
+
+  // 자동 X 접점이 운전 버스를 직접 공급하는 가지
+  {id:'x-contact-feed', state:'autoRun',      points:[[1326,292],[1326,610]]},
+
+  // 운전 공통선 및 T/MC1/MC2
+  {id:'run-bus',        state:'runBus',       points:[[1163,610],[1407,610]]},
+  {id:'t-coil-feed',    state:'t',            points:[[1163,610],[1163,720]]},
+  {id:'t-return',       state:'t',            points:[[1163,780],[1163,820]]},
+  {id:'mc1-feed',       state:'mc1',          points:[[1326,610],[1326,720]]},
+  {id:'mc1-return',     state:'mc1',          points:[[1326,780],[1326,820]]},
+  {id:'mc2-feed',       state:'mc2',          points:[[1407,610],[1407,720]]},
+  {id:'mc2-return',     state:'mc2',          points:[[1407,780],[1407,820]]},
+
+  // MC1/MC2 보조접점 -> 표시등 RL/GL
+  {id:'rl-feed',        state:'mc1',          points:[[1489,292],[1489,720]]},
+  {id:'rl-return',      state:'mc1',          points:[[1489,780],[1489,820]]},
+  {id:'gl-feed',        state:'mc2',          points:[[1570,292],[1570,720]]},
+  {id:'gl-return',      state:'mc2',          points:[[1570,780],[1570,820]]},
+];
+
+function diagram1FlowStates(){
+  const t0 = plc.timers['T0000'];
+  const t1 = plc.timers['T0001'];
+  const fr  = !!(t0 && t0.en);
+  const t   = !!(t1 && t1.en);
+  const yl  = !!plc.get('P00020');
+  const bz  = !!plc.get('P00021');
+  const x   = !!plc.get('M00000');
+  const hold= !!plc.get('M00001');
+  const mc1 = !!plc.get('P00022');
+  const mc2 = !!plc.get('P00023');
+  const fls = !!ui.fls;
+  const controlPower = true;
+  const eocrNormal = !ui.eocr;
+
+  // 실제 운전 공통선에 부하가 붙어 있는 동안만 전류 입자를 표시
+  const runBus = t || mc1 || mc2;
+  const manualRun = !ui.eocr && !ui.ss && !ui.pb0 && runBus;
+  const manualPB1 = manualRun && !!ui.pb1;
+  const manualHold = manualRun && !ui.pb1 && hold;
+  const autoRun = !ui.eocr && x && runBus;
+  const tripAny = fr || yl || bz;
+  const normalAny = x || fls || runBus || mc1 || mc2;
+  const any = tripAny || normalAny;
+
+  return { controlPower, eocrNormal, any, normalAny, tripAny, fr, yl, bz, fls, x, t, mc1, mc2,
+           runBus, manualRun, manualPB1, manualHold, autoRun };
+}
+
+
+function buildGeneric19AuxFlow(dnum, cfg){
+  const segs = [];
+  const add = (id,state,points)=>segs.push({id,state,points});
+  const topY = cfg.railY;
+  const bottomY = 820;
+  const leftX = cfg.leftX;
+  const tripY = 490;
+  const tripBusY = 610;
+  const runBusY = 610;
+
+  add('g-feed-pre','controlPower',[[507,topY],[leftX,topY]]);
+  add('g-top-bus','eocrn',[[leftX,topY],[cfg.rightX,topY]]);
+  add('g-bottom-bus','controlPower',[[leftX,bottomY],[cfg.rightX,bottomY]]);
+
+  if(cfg.x.EOCR != null){
+    add('g-eocr-ind','eocrn',[[leftX,topY],[leftX,bottomY]]);
+  }
+
+  ['FR','YL','BZ'].forEach(label=>{
+    const x = cfg.x[label];
+    if(x==null) return;
+    const key = label.toLowerCase();
+    add(`g-${key}` , key, [[leftX,topY],[leftX,tripY],[x,tripY],[x,bottomY-100]]);
+    add(`g-${key}-ret`, key, [[x,bottomY-40],[x,bottomY]]);
+  });
+
+  if(cfg.x.FLS != null){
+    add('g-fls','fls',[[Math.min(cfg.x.FLS, leftX+330),tripY],[cfg.x.FLS,tripY],[cfg.x.FLS,bottomY-100]]);
+    add('g-fls-ret','fls',[[cfg.x.FLS,bottomY-40],[cfg.x.FLS,bottomY]]);
+  }
+
+  const runCandidates = ['X','T','FR','MC1','MC2'].map(k=>cfg.x[k]).filter(v=>v!=null).sort((a,b)=>a-b);
+  const runStart = runCandidates.length ? runCandidates[0] : leftX+400;
+  const runEnd = runCandidates.length ? runCandidates[runCandidates.length-1] : cfg.rightX-80;
+  add('g-run-bus','runbus',[[runStart,runBusY],[runEnd,runBusY]]);
+
+  ['X','T','MC1','MC2','RL','GL'].forEach(label=>{
+    const x = cfg.x[label];
+    if(x==null) return;
+    const key = label.toLowerCase();
+    if(label==='X'){
+      add('g-x', key, [[x,topY],[x,bottomY-100]]);
+      add('g-x-ret', key, [[x,bottomY-40],[x,bottomY]]);
+      return;
+    }
+    add(`g-${key}`, key, [[x,runBusY],[x,bottomY-100]]);
+    add(`g-${key}-ret`, key, [[x,bottomY-40],[x,bottomY]]);
+  });
+
+  return segs;
+}
+
+function generic19FlowStates(dnum, cfg){
+  const st = {
+    controlPower: true,
+    eocrn: !ui.eocr,
+    runbus: false,
+    fr: false, yl: false, bz: false, fls: !!ui.fls,
+    x: false, t: false, mc1: false, mc2: false, rl: false, gl: false,
+  };
+  const labels = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
+  labels.forEach(label=>{
+    const key = label.toLowerCase();
+    const on = overlayTerminalOn(dlrResolve(dnum, label));
+    st[key] = on;
+  });
+  st.rl = st.mc1;
+  st.gl = st.mc2;
+  st.runbus = !!(st.x || st.t || st.mc1 || st.mc2 || st.fr);
+  return st;
+}
+
+function buildOverlayFor(dnum, cfg){
+  const svg = document.getElementById('diagramOverlay');
+  svg.innerHTML = '';
+  overlayWireEls = {}; overlayCoilEls = {}; overlayFrEls = {}; overlayCustomEls = {}; overlayLeftPowerEls = {};
+
+  const makeLine = (x1,y1,x2,y2,cls)=>{
+    const el = document.createElementNS(OVERLAY_SVGNS,'line');
+    el.setAttribute('x1',x1); el.setAttribute('y1',y1);
+    el.setAttribute('x2',x2); el.setAttribute('y2',y2);
+    el.setAttribute('class', cls);
+    svg.appendChild(el);
+    return el;
+  };
+  const makePath = (points,cls)=>{
+    const el = document.createElementNS(OVERLAY_SVGNS,'path');
+    el.setAttribute('d', points.map((p,i)=>`${i===0?'M':'L'} ${p[0]} ${p[1]}`).join(' '));
+    el.setAttribute('class', cls);
+    svg.appendChild(el);
+    return el;
+  };
+  const makeCircle = (cx,cy,r,cls)=>{
+    const el = document.createElementNS(OVERLAY_SVGNS,'circle');
+    el.setAttribute('cx',cx); el.setAttribute('cy',cy); el.setAttribute('r',r);
+    el.setAttribute('class', cls);
+    svg.appendChild(el);
+    return el;
+  };
+
+  // 좌측 주회로는 1~18 공통 기반으로 먼저 깔아 둠
+  LEFT_POWER_REAL_FLOW.forEach(seg=>{
+    overlayLeftPowerEls[seg.id] = { el:makePath(seg.points,'wire'), state:seg.state };
+  });
+
+  // 도면 1: 원본 검은 배선을 따라가는 실제 경로 오버레이
+  if(String(dnum)==='1'){
+    DIAGRAM1_REAL_FLOW.forEach(seg=>{
+      overlayCustomEls[seg.id] = { el:makePath(seg.points,'wire'), state:seg.state };
+    });
+
+    // 원본 하단 기기 위치는 기존 실측 좌표를 그대로 사용
+    Object.entries(cfg.x).forEach(([label,x])=>{
+      overlayCoilEls[label] = makeCircle(x, cfg.coilY, 30, 'coil-ring');
+    });
+
+    overlayBuiltFor = dnum;
+    return;
+  }
+
+  // 도면 2~9: 보조회로를 실제 경로 느낌의 공통 템플릿으로 생성
+  if(Number(dnum) >= 2 && Number(dnum) <= 9){
+    buildGeneric19AuxFlow(dnum, cfg).forEach(seg=>{
+      overlayCustomEls[seg.id] = { el:makePath(seg.points,'wire'), state:seg.state };
+    });
+    const labels = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
+    labels.forEach(label=>{
+      const x = cfg.x[label];
+      if(x==null) return;
+      overlayCoilEls[label] = makeCircle(x, cfg.coilY, 30, 'coil-ring');
+    });
+    (cfg.frContacts||[]).forEach(f=>{
+      overlayFrEls[f.label] = makeLine(f.x, f.y1, f.x, f.y2, 'fr-contact');
+    });
+    overlayBuiltFor = dnum;
+    return;
+  }
+
+  // 도면 10~18: 기존 방식 그대로 유지
+  makeLine(cfg.leftX, cfg.railY-90, cfg.leftX, cfg.railY, 'rail on');
+  makeLine(cfg.leftX, cfg.railY, cfg.rightX, cfg.railY, 'rail on');
+  const labels = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
+  labels.forEach(label=>{
+    const x = cfg.x[label];
+    if(x==null) return;
+    overlayWireEls[label] = makeLine(x, cfg.railY, x, cfg.coilY, 'wire');
+    overlayCoilEls[label] = makeCircle(x, cfg.coilY, 30, 'coil-ring');
+  });
+  (cfg.frContacts||[]).forEach(f=>{
+    overlayFrEls[f.label] = makeLine(f.x, f.y1, f.x, f.y2, 'fr-contact');
+  });
+  overlayBuiltFor = dnum;
+}
+
+function updateDiagramOverlay(){
+  const svg = document.getElementById('diagramOverlay');
+  const dnum = currentDiagramNumber();
+  const cfg = OVERLAY_CONFIGS[String(dnum)];
+  svg.classList.toggle('show', !!cfg);
+  if(!cfg) return;
+  if(overlayBuiltFor !== dnum) buildOverlayFor(dnum, cfg);
+
+  // 좌측 주회로(1~18 공통) 통전 상태 반영
+  const lp = leftPowerStates();
+  Object.values(overlayLeftPowerEls).forEach(item=>{
+    item.el.classList.toggle('on', !!lp[item.state]);
+  });
+
+  // 도면 1은 실제 배선 경로별로 통전 상태를 계산
+  if(String(dnum)==='1'){
+    const st = diagram1FlowStates();
+    Object.values(overlayCustomEls).forEach(item=>{
+      item.el.classList.toggle('on', !!st[item.state]);
+    });
+
+    const ringState = {
+      EOCR: !ui.eocr,
+      FR: st.fr,
+      YL: st.yl,
+      BZ: st.bz,
+      FLS: st.fls,
+      X: st.x,
+      T: st.t,
+      MC1: st.mc1,
+      MC2: st.mc2,
+      RL: st.mc1,
+      GL: st.mc2,
+    };
+    Object.entries(overlayCoilEls).forEach(([label,el])=>{
+      el.classList.toggle('on', !!ringState[label]);
+    });
+    return;
+  }
+
+  // 도면 2~9은 공통 realflow 템플릿으로 표시
+  if(Number(dnum) >= 2 && Number(dnum) <= 9){
+    const st = generic19FlowStates(dnum, cfg);
+    Object.values(overlayCustomEls).forEach(item=>{
+      item.el.classList.toggle('on', !!st[item.state]);
+    });
+    const labels = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
+    labels.forEach(label=>{
+      const on = overlayTerminalOn(dlrResolve(dnum, label));
+      overlayCoilEls[label]?.classList.toggle('on', !!on);
+    });
+    (cfg.frContacts||[]).forEach(f=>{
+      const on = !!plc.get(f.addr);
+      overlayFrEls[f.label]?.classList.toggle('on', on);
+    });
+    return;
+  }
+
+  // 도면 10~18은 기존 표시 로직 유지
+  const labels = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
+  labels.forEach(label=>{
+    if(cfg.x[label]==null) return;
+    const on = overlayTerminalOn(dlrResolve(dnum, label));
+    overlayWireEls[label].classList.toggle('on', on);
+    overlayCoilEls[label].classList.toggle('on', on);
+  });
+  (cfg.frContacts||[]).forEach(f=>{
+    const on = !!plc.get(f.addr);
+    overlayFrEls[f.label].classList.toggle('on', on);
+  });
+}
+
+function execute(program, master){
+  const stack = [];
+  for(const ins of program){
+    const op = ins[0];
+    if(op==='LOAD') stack.push(plc.get(ins[1]));
+    else if(op==='LOAD_NOT') stack.push(!plc.get(ins[1]));
+    else if(op==='LOADP') stack.push(plc.get(ins[1]) && !plc.prev[ins[1]]);
+    else if(op==='AND') stack[stack.length-1] = stack[stack.length-1] && plc.get(ins[1]);
+    else if(op==='AND_NOT') stack[stack.length-1] = stack[stack.length-1] && !plc.get(ins[1]);
+    else if(op==='OR') stack[stack.length-1] = stack[stack.length-1] || plc.get(ins[1]);
+    else if(op==='OR_NOT') stack[stack.length-1] = stack[stack.length-1] || !plc.get(ins[1]);
+    else if(op==='AND_LOAD'){ const b=stack.pop(), a=stack.pop(); stack.push(a&&b); }
+    else if(op==='OR_LOAD'){ const b=stack.pop(), a=stack.pop(); stack.push(a||b); }
+    else if(op==='MPUSH'){ master.push(stack[stack.length-1]); }
+    else if(op==='MLOAD'){ stack.push(master[master.length-1]); }
+    else if(op==='MPOP'){ stack.push(master.pop()); }
+    else if(op==='CMP'){
+      const base=ins[1], cmp=ins[2];
+      const dev = DEVICE_ALIAS[ins[4]] || ins[4];
+      let k = ins[3];
+      let lo = ins[5]||0;
+      if(dev==='T0000'){
+        // FR 전체주기가 원본 40(4.0s) 기준으로 0/20/40 형태의 절반값 상수로 짜여 있었으므로,
+        // 사용자가 바꾼 새 주기에 맞춰 그 비율(현재주기/40) 그대로 스케일링 (항상 정확히 반/반)
+        const scale = TIMER_OVERRIDE.T0000/40;
+        k = Math.round(k*scale); lo = Math.round(lo*scale);
+      } else if(dev==='T0003'){
+        // 긴FR도 FR과 동일한 방식: 원본 140(14.0s) 기준 0/70/140 절반값 상수를 새 주기 비율로 스케일링
+        const scale = TIMER_OVERRIDE.T0003/140;
+        k = Math.round(k*scale); lo = Math.round(lo*scale);
+      }
+      const t = plc.timers[dev];
+      const val = t ? t.acc : 0;
+      // 원본 XG5000 비교식은 "AND>[K] [DEV] [LO]" 형태로 [LO, K] 구간을 나타내는 범위 비교였음
+      // (예: FR 0~20구간 vs 20~40구간으로 BZ/YL이 서로 겹치지 않고 번갈아 켜짐)
+      const res = cmp==='>' ? (val>lo && val<=k) : (val>=lo && val<k);
+      if(base==='AND') stack[stack.length-1] = stack[stack.length-1] && res;
+      else if(base==='OR') stack[stack.length-1] = stack[stack.length-1] || res;
+      else if(base==='LOAD') stack.push(res);
+    }
+    else if(op==='OUT'){ plc.set(ins[1], stack[stack.length-1]); }
+    else if(op==='TON'){
+      const name = DEVICE_ALIAS[ins[1]] || ins[1];
+      const en=stack[stack.length-1];
+      let preset=ins[2];
+      if(TIMER_OVERRIDE.hasOwnProperty(name)) preset = TIMER_OVERRIDE[name];
+      let t = plc.timers[name];
+      if(!t){ t={preset:preset,acc:0,done:false,en:false}; plc.timers[name]=t; }
+      t.preset = preset;
+      t.en = en;
+      if(en){ if(t.acc<preset) t.acc++; t.done = t.acc>=preset; }
+      else { t.acc=0; t.done=false; }
+      plc.set(name, t.done);
+    }
+  }
+}
+
+function runDiagram(dnum, inputBits){
+  for(const k in inputBits) plc.set(k, inputBits[k]);
+  const prog = NEW_DIAGRAMS[dnum];
+  if(prog){
+    execute(prog, []);
+  } else {
+    // 정의되지 않은 도면 번호: 모든 출력 소자
+    ['P00020','P00021','P00022','P00023','P00026','M00000','M00001','M00002','M00003','M00004'].forEach(a=>plc.set(a,false));
+  }
+  plc.prev = Object.assign({}, plc.bits);
+}
+
+// ============================================================
+// I/O 정의 (실제 디바이스 주소 매핑)
+// ============================================================
+const switches = [
+  {id:'eocr',label:'EOCR', desc:'과부하',     off:'정상', on:'트립', addr:'P00007', row:1},
+  {id:'ss',  label:'SS',   desc:'수동/자동', off:'M', on:'A', addr:'P00003', row:1},
+  {id:'fls', label:'FLS',  desc:'플로트',     off:'OFF', on:'ON', addr:'P00004', row:1},
+  {id:'ls1', label:'LS1',  desc:'리밋1',      off:'OFF', on:'ON', addr:'P00005', row:2},
+  {id:'ls2', label:'LS2',  desc:'리밋2',      off:'OFF', on:'ON', addr:'P00006', row:2},
+];
+const buttons = [
+  {id:'pb0', label:'PB0', desc:'정지', cls:'pb0', addr:'P00000'},
+  {id:'pb1', label:'PB1', desc:'기동1', cls:'pb1', addr:'P00001'},
+  {id:'pb2', label:'PB2', desc:'기동2', cls:'pb2', addr:'P00002'},
+];
+const diagramBits = [
+  {id:'d16', label:'16', addr:'P0000E', weight:16},
+  {id:'d8',  label:'8',   addr:'P0000D', weight:8},
+  {id:'d4',  label:'4',   addr:'P0000C', weight:4},
+  {id:'d2',  label:'2',   addr:'P0000B', weight:2},
+  {id:'d1',  label:'1',   addr:'P0000A', weight:1},
+];
+const lamps = [
+  {id:'rl',  label:'RL', desc:'적색등(MC1 연동)', color:'red'},
+  {id:'gl',  label:'GL', desc:'녹색등(MC2 연동)', color:'green'},
+  {id:'yl',  label:'YL', desc:'황색등', color:'yellow'},
+  {id:'wl',  label:'WL', desc:'백색등', color:'white'},
+  {id:'mc1', label:'MC1', desc:'전자접촉기1', color:'red'},
+  {id:'mc2', label:'MC2', desc:'전자접촉기2', color:'blue'},
+];
+
+// UI 상태 (스위치/버튼/칩의 현재 위치) — 실제 PLC 입력 비트로 매핑됨
+const ui = { ss:false, fls:false, ls1:false, ls2:false, eocr:false,
+             pb0:false, pb1:false, pb2:false,
+             d16:false, d8:false, d4:false, d2:false, d1:true };
+
+let soundOn = true;
+let audioCtx = null;
+function ensureAudio(){
+  if(!audioCtx){ try{ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+}
+let buzzerNodes = null;
+function startBuzzer(){
+  if(!soundOn) return;
+  ensureAudio();
+  if(!audioCtx || buzzerNodes) return;
+  try{
+    const t = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const filt = audioCtx.createBiquadFilter();
+    const g = audioCtx.createGain();
+    const lfo = audioCtx.createOscillator();
+    const lfoGain = audioCtx.createGain();
+    o.type = 'sawtooth'; o.frequency.value = 740;
+    filt.type = 'lowpass'; filt.frequency.value = 1400; filt.Q.value = 0.7;
+    lfo.type = 'square'; lfo.frequency.value = 110; // 부저 특유의 "지지직"거리는 버즈감
+    lfoGain.gain.value = 0.035;
+    lfo.connect(lfoGain); lfoGain.connect(g.gain);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.09, t+0.02);
+    o.connect(filt); filt.connect(g); g.connect(audioCtx.destination);
+    o.start(t); lfo.start(t);
+    buzzerNodes = {o, g, lfo};
+  }catch(e){}
+}
+function stopBuzzer(){
+  if(!buzzerNodes) return;
+  try{
+    const {o, g, lfo} = buzzerNodes;
+    const t = audioCtx.currentTime;
+    g.gain.cancelScheduledValues(t);
+    g.gain.setValueAtTime(g.gain.value, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+0.04);
+    o.stop(t+0.06); lfo.stop(t+0.06);
+  }catch(e){}
+  buzzerNodes = null;
+}
+// 짧은 필터링 노이즈 클릭 (기계식 접점/버튼/스위치 소리의 재료)
+function playNoiseClick({freq=3000, q=1.2, type='bandpass', duration=0.02, gain=0.3, attack=0.0008}={}){
+  ensureAudio();
+  if(!audioCtx) return;
+  try{
+    const t = audioCtx.currentTime;
+    const bufferSize = Math.max(1, Math.floor(audioCtx.sampleRate*duration));
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for(let i=0;i<bufferSize;i++){ data[i] = Math.random()*2-1; }
+    const src = audioCtx.createBufferSource(); src.buffer = buffer;
+    const filt = audioCtx.createBiquadFilter();
+    filt.type = type; filt.frequency.value = freq; filt.Q.value = q;
+    const g = audioCtx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t+attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+duration);
+    src.connect(filt); filt.connect(g); g.connect(audioCtx.destination);
+    src.start(t);
+  }catch(e){}
+}
+// 낮은 "퉁" 하는 기계적 질량감 (버튼/접촉기용)
+function playThump({freq=120, toFreq=55, duration=0.09, gain=0.25}={}){
+  ensureAudio();
+  if(!audioCtx) return;
+  try{
+    const t = audioCtx.currentTime;
+    const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(freq, t);
+    o.frequency.exponentialRampToValueAtTime(toFreq, t+duration);
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t+duration);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(t); o.stop(t+duration+0.02);
+  }catch(e){}
+}
+// 로터리 셀렉터 스위치의 "딸깍" 디텐트 소리 (짧은 이중 클릭)
+function playSwitchClick(){
+  if(!soundOn) return;
+  playNoiseClick({freq:4800, q:3, type:'bandpass', duration:0.01, gain:0.3, attack:0.0006});
+  setTimeout(()=>{ if(soundOn) playNoiseClick({freq:3600, q:3, type:'bandpass', duration:0.012, gain:0.22, attack:0.0006}); }, 18);
+}
+// 전자접촉기(MC1/MC2)가 붙거나 떨어질 때 나는 "철컥" 소리 (금속성 클릭 + 저음 질량감)
+function playContactorClack(){
+  if(!soundOn) return;
+  playNoiseClick({freq:2400, q:1.4, type:'bandpass', duration:0.014, gain:0.4, attack:0.0004});
+  playThump({freq:140, toFreq:50, duration:0.1, gain:0.3});
+}
+// 푸시버튼(PB0/1/2)을 누르거나 뗄 때 나는 눌림 소리 (부드러운 저음 통 + 살짝의 클릭)
+function playButtonClick(pressedOn){
+  if(!soundOn) return;
+  playNoiseClick({freq: pressedOn?900:1300, q:0.8, type:'lowpass', duration:0.03, gain:0.28, attack:0.001});
+  playThump({freq: pressedOn?95:135, toFreq: pressedOn?45:75, duration:0.055, gain:0.16});
+}
+// 도면 선택 칩을 누를 때 나는 가벼운 "틱" 소리
+function playChipClick(){
+  if(!soundOn) return;
+  playNoiseClick({freq:2600, q:2, type:'highpass', duration:0.014, gain:0.18, attack:0.0006});
+}
+
+// ============================================================
+// Build UI
+// ============================================================
+const switchBlock = document.getElementById('switchBlock');
+const switchRowTop = document.getElementById('switchRowTop');
+const switchRowMiddle = document.getElementById('switchRowMiddle');
+const SWITCH_ROW_EL = {1:switchRowTop, 2:switchRowMiddle};
+switches.forEach(sw=>{
+  const unit = document.createElement('div');
+  unit.className='switch-unit';
+  unit.dataset.on='false';
+  unit.dataset.id=sw.id;
+  unit.innerHTML = `
+    <div class="switch-knob-wrap">
+      <div class="switch-tick tick-off"></div>
+      <div class="switch-tick tick-on"></div>
+      <div class="switch-lever"></div>
+    </div>
+    <div class="switch-label">${sw.label}</div>
+    <div class="switch-state">${sw.desc} · <span class="st-txt">${sw.off}</span></div>
+  `;
+  unit.addEventListener('click', ()=>{ ui[sw.id] = !ui[sw.id]; playSwitchClick(); logAction(sw.id, ui[sw.id]); });
+  (SWITCH_ROW_EL[sw.row] || switchRowTop).appendChild(unit);
+});
+
+// LS1·LS2 옆에 T0~T3 타이머 경과/설정 시간 미니 표시판
+const TIMER_MINI_LIST = [
+  {id:'T0000', label:'FR'},
+  {id:'T0001', label:'T1'},
+  {id:'T0002', label:'T2'},
+  {id:'T0003', label:'긴FR'},
+];
+const PRESET_FALLBACK = { T0000:40, T0001:50, T0002:50, T0003:140 };
+const timerMiniPanel = document.createElement('div');
+timerMiniPanel.className = 'timer-mini-panel';
+timerMiniPanel.id = 'timerMiniPanel';
+timerMiniPanel.innerHTML = `
+  <div class="timer-mini-title">TIME</div>
+  ${TIMER_MINI_LIST.map(tm=>`<div class="timer-mini-row" data-id="${tm.id}"><span class="tm-label">${tm.label}</span><span class="tm-val">0.0/0.0</span></div>`).join('')}
+`;
+switchRowMiddle.appendChild(timerMiniPanel);
+
+const lampBlock = document.getElementById('lampBlock');
+lamps.forEach(l=>{
+  const unit = document.createElement('div');
+  unit.className='lamp-unit';
+  unit.innerHTML = `
+    <div class="lamp ${l.color}" data-id="${l.id}"></div>
+    <div class="lamp-name">${l.label}</div>
+    <div class="lamp-desc">${l.desc}</div>
+  `;
+  lampBlock.appendChild(unit);
+});
+const bzUnit = document.createElement('div');
+bzUnit.className='lamp-unit';
+bzUnit.innerHTML = `
+  <div class="buzzer" id="bzLamp">🔔</div>
+  <div class="lamp-name">BZ</div>
+  <div class="lamp-desc">부저</div>
+`;
+lampBlock.appendChild(bzUnit);
+
+const btnBlock = document.getElementById('btnBlock');
+buttons.forEach(b=>{
+  const unit = document.createElement('div');
+  unit.className='btn-unit';
+  unit.innerHTML = `
+    <button class="pbtn ${b.cls}" data-id="${b.id}">${b.label}</button>
+    <div class="btn-desc">${b.desc}</div>
+  `;
+  const btn = unit.querySelector('button');
+  const toggle = (e)=>{
+    e.preventDefault();
+    ui[b.id] = !ui[b.id];
+    btn.classList.toggle('pressed', ui[b.id]);
+    playButtonClick(ui[b.id]);
+    logAction(b.id, ui[b.id]);
+  };
+  btn.addEventListener('pointerdown', toggle);
+  btnBlock.appendChild(unit);
+});
+
+const chipRow = document.getElementById('chipRow');
+diagramBits.forEach(bit=>{
+  const unit = document.createElement('div');
+  unit.className='chip-unit';
+  unit.innerHTML = `
+    <div class="chip" data-id="${bit.id}">${bit.weight}</div>
+    <div class="chip-name">${bit.label}</div>
+    <div class="chip-addr">${bit.addr}</div>
+  `;
+  unit.querySelector('.chip').addEventListener('click', ()=>{
+    ui[bit.id] = !ui[bit.id];
+    playChipClick();
+    renderDiagramNumber();
+    logAction(bit.id, ui[bit.id]);
+  });
+  chipRow.appendChild(unit);
+});
+function renderDiagramNumber(){
+  let sum = 0;
+  diagramBits.forEach(bit=>{
+    const el = chipRow.querySelector(`[data-id="${bit.id}"]`);
+    const on = ui[bit.id];
+    el.classList.toggle('on', on);
+    if(on) sum += bit.weight;
+  });
+  const readout = document.getElementById('diagramReadout');
+  readout.textContent = sum;
+  readout.classList.toggle('invalid', sum < 1 || sum > 18);
+
+  // 원본 도면 이미지 표시
+  const img = document.getElementById('diagramImage');
+  const emptyMsg = document.getElementById('diagramImageEmpty');
+  const titleEl = document.getElementById('diagramImageTitle');
+  const src = DIAGRAM_IMAGES[String(sum)];
+  if(src){
+    img.src = src;
+    img.classList.add('show');
+    emptyMsg.classList.add('hide');
+    titleEl.textContent = `원본 도면 ${sum}번`;
+  } else {
+    img.classList.remove('show');
+    img.removeAttribute('src');
+    emptyMsg.classList.remove('hide');
+    titleEl.textContent = '도면 미리보기';
+  }
+
+  buildDiagramLiveRow(sum);
+  renderExplanation(sum);
+}
+renderDiagramNumber();
+
+// 도면 이미지 확대보기(라이트박스)
+const lightbox = document.getElementById('lightbox');
+const lightboxImg = document.getElementById('lightboxImg');
+document.getElementById('diagramImage').addEventListener('click', ()=>{
+  const src = document.getElementById('diagramImage').src;
+  if(!src) return;
+  lightboxImg.src = src;
+  lightbox.classList.add('open');
+});
+lightbox.addEventListener('click', ()=>{ lightbox.classList.remove('open'); lightboxImg.src=''; });
+
+// ---- 내부 릴레이(X0~X4) / 타이머(T0~T3) 표시등 ----
+const RELAYS = [
+  {id:'M00000', label:'X0'}, {id:'M00001', label:'X1'}, {id:'M00002', label:'X2'},
+  {id:'M00003', label:'X3'}, {id:'M00004', label:'X4'},
+];
+const TIMERS_DISP = [
+  {id:'T0000', label:'T0(FR)'}, {id:'T0001', label:'T1'},
+  {id:'T0002', label:'T2'}, {id:'T0003', label:'T3(긴FR)'},
+];
+const relayRow = document.getElementById('relayRow');
+RELAYS.forEach(r=>{
+  const unit = document.createElement('div');
+  unit.className = 'relay-unit';
+  unit.innerHTML = `<div class="relay-led" data-id="${r.id}"></div><div class="relay-name">${r.label}</div>`;
+  relayRow.appendChild(unit);
+});
+const timerRow = document.getElementById('timerRow');
+TIMERS_DISP.forEach(t=>{
+  const unit = document.createElement('div');
+  unit.className = 'relay-unit';
+  unit.innerHTML = `<div class="relay-led timer-led" data-id="${t.id}"></div><div class="relay-name">${t.label}</div>`;
+  timerRow.appendChild(unit);
+});
+function renderInternal(){
+  RELAYS.forEach(r=>{
+    const el = relayRow.querySelector(`[data-id="${r.id}"]`);
+    el.classList.toggle('on', plc.get(r.id));
+  });
+  TIMERS_DISP.forEach(t=>{
+    const el = timerRow.querySelector(`[data-id="${t.id}"]`);
+    const timer = plc.timers[t.id];
+    el.classList.toggle('on', !!(timer && timer.en));
+  });
+}
+
+document.getElementById('soundBtn').addEventListener('click', (e)=>{
+  soundOn = !soundOn;
+  e.target.textContent = soundOn ? '🔊 소리 켜짐' : '🔇 소리 꺼짐';
+  if(!soundOn) stopBuzzer();
+  saveConfig();
+});
+document.getElementById('frSetInput').addEventListener('input', (e)=>{
+  const sec = parseFloat(e.target.value);
+  if(!isNaN(sec) && sec>0){ TIMER_OVERRIDE.T0000 = Math.round(sec*10); saveConfig(); }
+});
+document.getElementById('longFrSetInput').addEventListener('input', (e)=>{
+  const sec = parseFloat(e.target.value);
+  if(!isNaN(sec) && sec>0){ TIMER_OVERRIDE.T0003 = Math.round(sec*10); saveConfig(); }
+});
+document.getElementById('t1SetInput').addEventListener('input', (e)=>{
+  const sec = parseFloat(e.target.value);
+  if(!isNaN(sec) && sec>0){ TIMER_OVERRIDE.T0001 = Math.round(sec*10); saveConfig(); }
+});
+document.getElementById('t2SetInput').addEventListener('input', (e)=>{
+  const sec = parseFloat(e.target.value);
+  if(!isNaN(sec) && sec>0){ TIMER_OVERRIDE.T0002 = Math.round(sec*10); saveConfig(); }
+});
+document.getElementById('resetBtn').addEventListener('click', ()=>{
+  Object.keys(ui).forEach(k=> ui[k]=false);
+  ui.d1 = true; // 도면 1번을 패널 기본 화면으로 유지
+  plc.bits={}; plc.prev={}; plc.timers={};
+  document.querySelectorAll('.pbtn').forEach(b=>b.classList.remove('pressed'));
+  stopBuzzer(); prevBz=false;
+  renderDiagramNumber();
+  clearActionLog();
+  quizPending = null;
+  document.getElementById('quizAnswerOn').style.display = 'none';
+  document.getElementById('quizAnswerOff').style.display = 'none';
+  document.getElementById('quizQuestion').textContent = '"🎲 새 문제" 버튼을 눌러 시작하세요. (먼저 도면 번호를 선택해주세요)';
+  document.getElementById('quizResult').textContent = '';
+  // ※ FR/T1/T2 설정값과 소리 설정은 전원 재투입 개념이므로 리셋해도 유지됩니다.
+});
+
+// ============================================================
+// Simulation loop — 100ms = PLC 타이머 1스캔 단위(0.1s)
+// ============================================================
+let prevBz=false;
+let prevMc1=false, prevMc2=false;
+function currentDiagramNumber(){
+  let n = 0;
+  if(ui.d1) n+=1; if(ui.d2) n+=2; if(ui.d4) n+=4; if(ui.d8) n+=8; if(ui.d16) n+=16;
+  return n;
+}
+function tick(){
+  const inputBits = {
+    P00000: ui.pb0, P00001: ui.pb1, P00002: ui.pb2,
+    P00003: ui.ss,  P00004: ui.fls, P00005: ui.ls1,
+    P00006: ui.ls2, P00007: ui.eocr,
+    P0000A: ui.d1,  P0000B: ui.d2,  P0000C: ui.d4,
+    P0000D: ui.d8,  P0000E: ui.d16,
+  };
+  const dnum = currentDiagramNumber();
+  runDiagram(dnum, inputBits);
+  render();
+}
+
+function render(){
+  renderInternal();
+  updatePowerCircuit();
+  updateRunStatusBadge();
+  updateDiagramLiveRow();
+  updateDiagramOverlay();
+  switches.forEach(sw=>{
+    const unit = switchBlock.querySelector(`[data-id="${sw.id}"]`);
+    const on = ui[sw.id];
+    unit.dataset.on = on ? 'true':'false';
+    unit.querySelector('.st-txt').textContent = on ? sw.on : sw.off;
+  });
+
+  TIMER_MINI_LIST.forEach(tm=>{
+    const row = timerMiniPanel.querySelector(`[data-id="${tm.id}"]`);
+    const timer = plc.timers[tm.id];
+    const preset = timer ? timer.preset : (TIMER_OVERRIDE.hasOwnProperty(tm.id) ? TIMER_OVERRIDE[tm.id] : PRESET_FALLBACK[tm.id]);
+    const acc = timer ? timer.acc : 0;
+    row.querySelector('.tm-val').textContent = `${(acc/10).toFixed(1)}/${(preset/10).toFixed(1)}`;
+    row.classList.toggle('active', !!(timer && timer.en));
+  });
+
+  const mc1 = plc.get('P00022'), mc2 = plc.get('P00023');
+  if(mc1 !== prevMc1) playContactorClack();
+  if(mc2 !== prevMc2) playContactorClack();
+  prevMc1 = mc1; prevMc2 = mc2;
+  const lampVal = {
+    rl: mc1, gl: mc2,
+    yl: plc.get('P00020'),
+    wl: plc.get('P00026'),
+    mc1: mc1, mc2: mc2,
+  };
+  lamps.forEach(l=>{
+    const el = lampBlock.querySelector(`.lamp[data-id="${l.id}"]`);
+    el.classList.toggle('on', !!lampVal[l.id]);
+  });
+  const bz = plc.get('P00021');
+  const bzEl = document.getElementById('bzLamp');
+  bzEl.classList.toggle('on', bz);
+  if(bz && !prevBz) startBuzzer();
+  if(!bz && prevBz) stopBuzzer();
+  prevBz = bz;
+
+  const t = (name)=> plc.timers[name] ? (plc.timers[name].acc/10).toFixed(1)+'s / '+(plc.timers[name].preset/10).toFixed(1)+'s' : '0.0s';
+  const grid = document.getElementById('statusGrid');
+  grid.innerHTML = `
+    <div><span>모드</span><span>${ui.ss ? '자동(A)':'수동(M)'}</span></div>
+    <div><span>EOCR</span><span>${ui.eocr ? '트립':'정상'}</span></div>
+    <div><span>X (M00000)</span><span>${plc.get('M00000')}</span></div>
+    <div><span>X1 (M00001)</span><span>${plc.get('M00001')}</span></div>
+    <div><span>X2 (M00002)</span><span>${plc.get('M00002')}</span></div>
+    <div><span>X3/X4</span><span>${plc.get('M00003')} / ${plc.get('M00004')}</span></div>
+    <div><span>T0000(FR)</span><span>${t('T0000')}</span></div>
+    <div><span>T0001(T)</span><span>${t('T0001')}</span></div>
+    <div><span>T0002(T_2)</span><span>${t('T0002')}</span></div>
+    <div><span>T0003(긴FR)</span><span>${t('T0003')}</span></div>
+  `;
+}
+
+// ============================================================
+// 동작 로그 / 리플레이
+// ============================================================
+let actionLog = [];
+let logStartTime = performance.now();
+let isReplaying = false;
+const LOG_LABELS = {};
+switches.forEach(sw=> LOG_LABELS[sw.id]=sw.label);
+buttons.forEach(b=> LOG_LABELS[b.id]=b.label);
+diagramBits.forEach(bit=> LOG_LABELS[bit.id]=`도면칩 ${bit.weight}`);
+
+function logAction(id, value){
+  if(isReplaying) return;
+  actionLog.push({t: performance.now()-logStartTime, id, value});
+  renderActionLog();
+}
+function renderActionLog(){
+  const box = document.getElementById('actionLogList');
+  if(!box) return;
+  if(actionLog.length===0){ box.innerHTML = '<span style="color:var(--muted);">기록된 동작이 없습니다.</span>'; return; }
+  box.innerHTML = actionLog.map(a=>{
+    const label = LOG_LABELS[a.id] || a.id;
+    return `<div>[${(a.t/1000).toFixed(1)}s] ${label} → ${a.value?'ON':'OFF'}</div>`;
+  }).join('');
+  box.scrollTop = box.scrollHeight;
+}
+function clearActionLog(){
+  actionLog = [];
+  logStartTime = performance.now();
+  renderActionLog();
+}
+function applyLoggedChange(id, value){
+  ui[id] = value;
+  if(switches.some(s=>s.id===id)){
+    playSwitchClick();
+  } else if(buttons.some(b=>b.id===id)){
+    const btnEl = document.querySelector(`.pbtn[data-id="${id}"]`);
+    if(btnEl) btnEl.classList.toggle('pressed', value);
+    playButtonClick(value);
+  } else if(diagramBits.some(d=>d.id===id)){
+    playChipClick();
+    renderDiagramNumber();
+  }
+}
+function replayLog(){
+  if(actionLog.length===0 || isReplaying) return;
+  isReplaying = true;
+  const btn = document.getElementById('replayBtn');
+  btn.textContent = '⏸ 재생 중...';
+  document.querySelector('.board').classList.add('replaying');
+  actionLog.forEach(entry=>{
+    setTimeout(()=>{ applyLoggedChange(entry.id, entry.value); }, entry.t / simSpeed);
+  });
+  const totalTime = (actionLog[actionLog.length-1].t / simSpeed) + 300;
+  setTimeout(()=>{
+    isReplaying = false;
+    btn.textContent = '▶ 재생';
+    document.querySelector('.board').classList.remove('replaying');
+  }, totalTime);
+}
+document.getElementById('replayBtn').addEventListener('click', replayLog);
+document.getElementById('clearLogBtn').addEventListener('click', clearActionLog);
+renderActionLog();
+
+// ============================================================
+// 도면별 동작 해설 (AI가 IL 코드를 분석한 설명, 도면 선택 시 자동 표시)
+// ============================================================
+function renderExplanation(dnum){
+  const tagEl = document.getElementById("explainTag");
+  const summaryEl = document.getElementById("explainSummary");
+  const toggleEl = document.getElementById("explainDetailToggle");
+  const listEl = document.getElementById("explainList");
+  const emptyEl = document.getElementById("explainEmpty");
+  const exp = DIAGRAM_EXPLANATIONS[String(dnum)];
+  if(exp){
+    tagEl.style.display = "inline-block";
+    tagEl.textContent = exp.tag;
+    summaryEl.style.display = "block";
+    summaryEl.textContent = exp.items[0] || "";
+    const rest = exp.items.slice(1);
+    if(rest.length){
+      toggleEl.style.display = "block";
+      listEl.innerHTML = rest.map(it=>`<li>${it}</li>`).join("");
+    } else {
+      toggleEl.style.display = "none";
+      listEl.innerHTML = "";
+    }
+    emptyEl.style.display = "none";
+  } else {
+    tagEl.style.display = "none";
+    summaryEl.style.display = "none";
+    toggleEl.style.display = "none";
+    listEl.innerHTML = "";
+    emptyEl.style.display = "block";
+  }
+}
+
+
+// ============================================================
+// 🎲 예측 퀴즈 모드 — 수동으로 정답을 정해두지 않고, 실제 IL 실행 결과로 채점
+// ============================================================
+const QUIZ_INPUTS = [
+  {id:'pb0', label:'PB0'}, {id:'pb1', label:'PB1'}, {id:'pb2', label:'PB2'},
+  {id:'ss', label:'SS'}, {id:'fls', label:'FLS'}, {id:'ls1', label:'LS1'}, {id:'ls2', label:'LS2'},
+];
+const QUIZ_OUTPUTS = [
+  {addr:'P00022', label:'MC1'}, {addr:'P00023', label:'MC2'},
+  {addr:'P00020', label:'YL'}, {addr:'P00026', label:'WL'}, {addr:'P00021', label:'BZ'},
+];
+let quizScore = {correct:0, total:0};
+let quizPending = null;
+
+function pickQuizScenario(){
+  const dnum = currentDiagramNumber();
+  if(!dnum || dnum<1 || dnum>18){
+    document.getElementById('quizQuestion').textContent = '먼저 도면 번호(1~18)를 선택해주세요.';
+    return null;
+  }
+  const input = QUIZ_INPUTS[Math.floor(Math.random()*QUIZ_INPUTS.length)];
+  const output = QUIZ_OUTPUTS[Math.floor(Math.random()*QUIZ_OUTPUTS.length)];
+  return {input, output, dnum};
+}
+function startQuizQuestion(){
+  const scenario = pickQuizScenario();
+  if(!scenario) return;
+  const isButton = buttons.some(b=>b.id===scenario.input.id);
+  const currentVal = ui[scenario.input.id];
+  const action = isButton ? (currentVal ? '떼면' : '누르면') : (currentVal ? 'OFF로 바꾸면' : 'ON으로 바꾸면');
+  document.getElementById('quizQuestion').innerHTML =
+    `<b>도면 ${scenario.dnum}번</b> · 지금 <b>${scenario.input.label}</b>을(를) <b>${action}</b>, 3초 뒤 <b>${scenario.output.label}</b>은 어떻게 될까요?`;
+  document.getElementById('quizAnswerOn').style.display = 'inline-block';
+  document.getElementById('quizAnswerOff').style.display = 'inline-block';
+  document.getElementById('quizResult').textContent = '';
+  quizPending = { inputId: scenario.input.id, isButton, outputAddr: scenario.output.addr, outputLabel: scenario.output.label };
+}
+function answerQuiz(predictOn){
+  if(!quizPending) return;
+  document.getElementById('quizAnswerOn').style.display = 'none';
+  document.getElementById('quizAnswerOff').style.display = 'none';
+  const { inputId, isButton, outputAddr, outputLabel } = quizPending;
+  quizPending = null;
+  ui[inputId] = !ui[inputId];
+  if(isButton){
+    const btnEl = document.querySelector(`.pbtn[data-id="${inputId}"]`);
+    if(btnEl) btnEl.classList.toggle('pressed', ui[inputId]);
+    playButtonClick(ui[inputId]);
+  } else {
+    playSwitchClick();
+  }
+  document.getElementById('quizResult').textContent = '⏳ 3초 후 결과 확인 중...';
+  setTimeout(()=>{
+    const actual = !!plc.get(outputAddr);
+    const correct = actual === predictOn;
+    quizScore.total++;
+    if(correct) quizScore.correct++;
+    document.getElementById('quizResult').innerHTML = correct
+      ? `✅ 정답! ${outputLabel}은 실제로 <b>${actual?'ON':'OFF'}</b>이 됐어요.`
+      : `❌ 오답. ${outputLabel}은 실제로 <b>${actual?'ON':'OFF'}</b>이 됐어요.`;
+    document.getElementById('quizScore').textContent = `정답 ${quizScore.correct} / ${quizScore.total}`;
+  }, 3000 / simSpeed);
+}
+document.getElementById('quizNewBtn').addEventListener('click', startQuizQuestion);
+document.getElementById('quizAnswerOn').addEventListener('click', ()=>answerQuiz(true));
+document.getElementById('quizAnswerOff').addEventListener('click', ()=>answerQuiz(false));
+
+// ============================================================
+// 실시간 동력회로 SVG — EOCR 트립 / MC1·MC2 여자 상태를 그대로 반영
+// ============================================================
+function pcSetContact(bladeId, outId, bodyId, fanId, on){
+  const blade = document.getElementById(bladeId);
+  const out = document.getElementById(outId);
+  const body = document.getElementById(bodyId);
+  const fan = document.getElementById(fanId);
+  blade.classList.toggle('pc-closed', on);
+  blade.setAttribute('y2', on ? 164 : 139);
+  out.classList.toggle('pc-energized', on);
+  body.classList.toggle('pc-energized', on);
+  fan.classList.toggle('pc-spinning', on);
+}
+// 상단 "정상 동작" 배지 — EOCR 트립 시 빨간색 "EOCR 트립"으로 전환
+function updateRunStatusBadge(){
+  const badge = document.getElementById('runStatusBadge');
+  if(!badge) return;
+  const tripped = !!ui.eocr;
+  badge.classList.toggle('trip', tripped);
+  badge.innerHTML = tripped
+    ? '<span class="run-status-dot"></span>EOCR 트립'
+    : '<span class="run-status-dot"></span>정상 동작';
+}
+function updatePowerCircuit(){  const eocrTrip = !!ui.eocr;
+  const mc1 = plc.get('P00022');
+  const mc2 = plc.get('P00023');
+  document.getElementById('pcEocrBox').classList.toggle('pc-tripped', eocrTrip);
+  const lbl = document.getElementById('pcEocrLbl');
+  lbl.classList.toggle('pc-tripped', eocrTrip);
+  lbl.textContent = eocrTrip ? 'TRIP' : 'EOCR';
+  const busOn = !eocrTrip;
+  ['pcWireEocrOut','pcSplitBus','pcMc1Feed','pcMc2Feed'].forEach(id=>{
+    document.getElementById(id).classList.toggle('pc-energized', busOn);
+  });
+  pcSetContact('pcMc1Blade','pcMc1Out','pcM1Body','pcM1Fan', mc1);
+  pcSetContact('pcMc2Blade','pcMc2Out','pcM2Body','pcM2Fan', mc2);
+}
+document.getElementById('togglePowerPhotoBtn').addEventListener('click', (e)=>{
+  const wrap = document.getElementById('powerPhotoWrap');
+  const show = wrap.style.display === 'none';
+  wrap.style.display = show ? 'block' : 'none';
+  e.target.textContent = show ? '📷 사진 숨기기' : '📷 실제 배선 사진 보기';
+});
+
+
+// ============================================================
+// 설정값 저장/복원 — 전원 재투입(새로고침) 시에도 유지, 전체 리셋에는 영향 없음
+// ============================================================
+const CFG_KEY = 'panel_cfg_v1';
+function saveConfig(){
+  try{
+    localStorage.setItem(CFG_KEY, JSON.stringify({
+      fr: TIMER_OVERRIDE.T0000, longFr: TIMER_OVERRIDE.T0003, t1: TIMER_OVERRIDE.T0001, t2: TIMER_OVERRIDE.T0002,
+      sound: soundOn, speed: simSpeed
+    }));
+  }catch(e){}
+}
+function loadConfig(){
+  try{
+    const raw = localStorage.getItem(CFG_KEY);
+    if(!raw) return;
+    const cfg = JSON.parse(raw);
+    if(typeof cfg.fr === 'number'){ TIMER_OVERRIDE.T0000 = cfg.fr; document.getElementById('frSetInput').value = (cfg.fr/10).toFixed(1); }
+    if(typeof cfg.longFr === 'number'){ TIMER_OVERRIDE.T0003 = cfg.longFr; document.getElementById('longFrSetInput').value = (cfg.longFr/10).toFixed(1); }
+    if(typeof cfg.t1 === 'number'){ TIMER_OVERRIDE.T0001 = cfg.t1; document.getElementById('t1SetInput').value = (cfg.t1/10).toFixed(1); }
+    if(typeof cfg.t2 === 'number'){ TIMER_OVERRIDE.T0002 = cfg.t2; document.getElementById('t2SetInput').value = (cfg.t2/10).toFixed(1); }
+    if(typeof cfg.sound === 'boolean'){
+      soundOn = cfg.sound;
+      document.getElementById('soundBtn').textContent = soundOn ? '🔊 소리 켜짐' : '🔇 소리 꺼짐';
+    }
+    if(typeof cfg.speed === 'number'){ simSpeed = cfg.speed; }
+  }catch(e){}
+}
+
+// ============================================================
+// 재생 속도 조절 (0.25x~4x) — 스캔당 시뮬레이션 시간(0.1s)은 동일, 실제 진행 속도만 변경
+// ============================================================
+let simSpeed = 1;
+let tickInterval = null;
+function startTickLoop(){
+  if(tickInterval) clearInterval(tickInterval);
+  tickInterval = setInterval(tick, 100/simSpeed);
+}
+document.querySelectorAll('.speed-btn').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    simSpeed = parseFloat(btn.dataset.speed);
+    document.querySelectorAll('.speed-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    startTickLoop();
+    saveConfig();
+  });
+});
+
+loadConfig();
+document.querySelectorAll('.speed-btn').forEach(b=>{
+  b.classList.toggle('active', parseFloat(b.dataset.speed) === simSpeed);
+});
+startTickLoop();
+render();
+
+// ---------- 아코디언 부드러운 펼침/접힘 + 접힌 상태 요약 표시 ----------
+(function(){
+  document.querySelectorAll('details.status').forEach(function(d){
+    var summary = d.querySelector('summary');
+    var wrap = document.createElement('div');
+    wrap.className = 'details-content';
+    var node = summary.nextSibling;
+    while(node){
+      var next = node.nextSibling;
+      wrap.appendChild(node);
+      node = next;
+    }
+    d.appendChild(wrap);
+  });
+})();
+
+function updateAccordionSummaries(){
+  var logSpan = document.getElementById('logStateSpan');
+  if(logSpan) logSpan.textContent = actionLog.length ? ` — ${actionLog.length}건 기록됨` : ' — 기록 없음';
+
+  var aiSpan = document.getElementById('aiStateSpan');
+  if(aiSpan){
+    var dnum = currentDiagramNumber();
+    aiSpan.textContent = (dnum>=1 && dnum<=18) ? ` — 도면 ${dnum}번` : ' — 도면 미선택';
+  }
+
+  var quizSpan = document.getElementById('quizStateSpan');
+  if(quizSpan) quizSpan.textContent = ` — 정답 ${quizScore.correct} / ${quizScore.total}`;
+
+  var debugSpan = document.getElementById('debugStateSpan');
+  if(debugSpan){
+    debugSpan.textContent = ` — ${ui.ss ? '자동(A)':'수동(M)'} · EOCR ${ui.eocr ? '트립':'정상'}`;
+  }
+
+  var powerSpan = document.getElementById('powerStateSpan');
+  if(powerSpan){
+    var f1 = document.getElementById('pcM1Fan');
+    var f2 = document.getElementById('pcM2Fan');
+    var running = (f1 && f1.classList.contains('pc-spinning')) || (f2 && f2.classList.contains('pc-spinning'));
+    powerSpan.textContent = running ? ' — 모터 구동 중' : ' — 정지';
+  }
+}
+var _origRender = render;
+render = function(){
+  _origRender();
+  updateAccordionSummaries();
+};
+updateAccordionSummaries();
