@@ -224,7 +224,7 @@ function overlayTerminalOn(resolved){
 
 const OVERLAY_SVGNS = 'http://www.w3.org/2000/svg';
 let overlayBuiltFor = null;
-let overlayWireEls = {}, overlayCoilEls = {}, overlayFrEls = {}, overlayCustomEls = {}, overlayLeftPowerEls = {};
+let overlayWireEls = {}, overlayCoilEls = {}, overlayFrEls = {}, overlayCustomEls = {}, overlayLeftPowerEls = {}, overlayGroundEls = {};
 
 
 // ============================================================
@@ -257,15 +257,23 @@ const LEFT_POWER_REAL_FLOW = [
   {id:'lp-mc1-l2', state:'mc1Power', points:[[186,568],[186,608],[186,738],[186,774]]},
   {id:'lp-mc1-l3', state:'mc1Power', points:[[226,568],[226,608],[226,738],[226,774]]},
 
-  // MC2 역회전 입력 교차배선 -> 주접점 상단
-  {id:'lp-mc2-feed1', state:'sourcePower', points:[[267,480],[267,486],[370,486],[370,568],[370,608]]},
-  {id:'lp-mc2-feed2', state:'sourcePower', points:[[226,506],[330,506],[330,568],[330,608]]},
-  {id:'lp-mc2-feed3', state:'sourcePower', points:[[186,526],[289,526],[289,568],[289,608]]},
+  // MC2 역회전 입력 교차배선 -> 실제 MC2 주접점 상단(원본 검은선 실측)
+  // PE(267)는 상선이 아니므로 MC2 3상에서 제외한다.
+  {id:'lp-mc2-feed1', state:'sourcePower', points:[[145,546],[349,546],[349,568],[349,608]]},
+  {id:'lp-mc2-feed2', state:'sourcePower', points:[[186,526],[390,526],[390,568],[390,608]]},
+  {id:'lp-mc2-feed3', state:'sourcePower', points:[[226,506],[431,506],[431,568],[431,608]]},
 
-  // MC2 역회전 가지 -> TB3 -> M2
-  {id:'lp-mc2-l1', state:'mc2Power', points:[[289,608],[289,738],[289,774]]},
-  {id:'lp-mc2-l2', state:'mc2Power', points:[[330,608],[330,738],[330,774]]},
-  {id:'lp-mc2-l3', state:'mc2Power', points:[[370,608],[370,738],[370,774]]},
+  // MC2 역회전 가지 -> TB3 -> M2 (MC2 실제 접점 x좌표)
+  {id:'lp-mc2-l1', state:'mc2Power', points:[[349,608],[349,738],[349,774]]},
+  {id:'lp-mc2-l2', state:'mc2Power', points:[[390,608],[390,738],[390,774]]},
+  {id:'lp-mc2-l3', state:'mc2Power', points:[[431,608],[431,738],[431,774]]},
+];
+
+// 보호도체(PE)는 통전 애니메이션과 분리해 항상 녹색으로 표시한다.
+// TB1 PE -> TB2/M1 PE/접지, TB1 PE -> TB3/M2 PE/접지의 원본 검은선 경로.
+const LEFT_POWER_GROUND_FLOW = [
+  {id:'pe-m1', points:[[267,255],[267,480],[267,738],[267,806]]},
+  {id:'pe-m2-bridge', points:[[267,480],[470,480],[470,738],[470,806]]},
 ];
 
 function leftPowerStates(){
@@ -301,13 +309,15 @@ const DIAGRAM1_REAL_FLOW = [
   {id:'bz-return',      state:'bz',           points:[[837,780],[837,820]]},
 
   // FLS 입력 표시 가지
-  {id:'eocr-mid-to-auto',state:'eocrNormal',   points:[[593,490],[1081,490]]},
+  {id:'eocr-mid-branch', state:'eocrNormal', points:[[593,490],[674,490]]},
   {id:'fls-ind-feed',   state:'fls',          points:[[1081,490],[919,490],[919,720]]},
   {id:'fls-ind-return', state:'fls',          points:[[919,780],[919,820]]},
 
   // 자동(A) : SS(A) -> FLS -> X
-  {id:'auto-x-feed',    state:'x',            points:[[1081,292],[1081,720]]},
-  {id:'x-return',       state:'x',            points:[[1081,780],[1081,820]]},
+  {id:'auto-a-feed', state:'eocrNormal', points:[[1081,292],[1081,333]]},
+  {id:'auto-fls-feed', state:'fls', points:[[1081,373],[1081,537]]},
+  {id:'x-coil-feed', state:'x', points:[[1326,610],[1326,720]]},
+  {id:'x-return', state:'x', points:[[1326,780],[1326,820]]},
 
   // 수동(M) : SS(M) -> PB0 -> PB1 또는 자기유지 접점
   {id:'manual-common',  state:'manualRun',    points:[[1163,292],[1163,490]]},
@@ -505,7 +515,7 @@ function detectedFlowState(dnum,cfg,state){
 function buildOverlayFor(dnum, cfg){
   const svg = document.getElementById('diagramOverlay');
   svg.innerHTML = '';
-  overlayWireEls = {}; overlayCoilEls = {}; overlayFrEls = {}; overlayCustomEls = {}; overlayLeftPowerEls = {};
+  overlayWireEls = {}; overlayCoilEls = {}; overlayFrEls = {}; overlayCustomEls = {}; overlayLeftPowerEls = {}; overlayGroundEls = {};
 
   const makeLine = (x1,y1,x2,y2,cls)=>{
     const el = document.createElementNS(OVERLAY_SVGNS,'line');
@@ -533,6 +543,9 @@ function buildOverlayFor(dnum, cfg){
   // 좌측 주회로는 1~18 공통 기반으로 먼저 깔아 둠
   LEFT_POWER_REAL_FLOW.forEach(seg=>{
     overlayLeftPowerEls[seg.id] = { el:makePath(seg.points,'wire'), state:seg.state };
+  });
+  LEFT_POWER_GROUND_FLOW.forEach(seg=>{
+    overlayGroundEls[seg.id] = makePath(seg.points,'ground-wire on');
   });
 
   // 도면 1: 원본 검은 배선을 따라가는 실제 경로 오버레이
