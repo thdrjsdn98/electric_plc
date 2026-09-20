@@ -449,30 +449,40 @@ function buildDetectedWireFlow(dnum,cfg){
   g.v.forEach((v,i)=>{
     const label=nearestOverlayLabel(cfg,v[0]);
     if(label) segs.push({id:`d-v-${i}`,state:`label:${label}`,points:[[v[0],v[1]],[v[0],v[2]]]});
-    else if(Math.abs(v[0]-511)<=4) segs.push({id:`d-v-${i}`,state:'controlPower',points:[[v[0],v[1]],[v[0],v[2]]]});
+    else if(Math.abs(v[0]-511)<=4) segs.push({id:`d-v-${i}`,state:'returnActive',points:[[v[0],v[1]],[v[0],v[2]]]});
   });
   g.h.forEach((h,i)=>{
     const y=h[0], x1=h[1], x2=h[2];
-    let state='labels:';
-    const labels=Object.entries(cfg.x).filter(([,x])=>x>=x1-4&&x<=x2+4).map(([l])=>l);
+    let state='ends:';
+    // 중간 수평선은 '선 아래에 있는 출력 하나라도 ON' 방식으로 켜지지 않게 한다.
+    // 원본 도면의 양 끝 분기/세로선에 가장 가까운 기기 상태를 각각 찾아,
+    // 두 쪽이 실제로 살아 있을 때만 수평 구간을 통전 표시한다.
+    const entries=Object.entries(cfg.x);
+    const near=(x)=>{
+      let best=null,dist=1e9;
+      entries.forEach(([l,lx])=>{ const d=Math.abs(lx-x); if(d<dist){dist=d;best=l;} });
+      return dist<=105?best:null;
+    };
+    const a=near(x1), b=near(x2);
     // 상단 전원모선/하단 공통선은 회로 전체 전원 상태로 취급
     if(y<320) state='eocrn';
-    else if(y>800) state='controlPower';
-    else state += labels.join(',');
+    else if(y>800) state='returnActive';
+    else state += [a,b].filter(Boolean).join(',');
     segs.push({id:`d-h-${i}`,state,points:[[x1,y],[x2,y]]});
   });
   return segs;
 }
 // 원본 도면상 선이 겹쳐 보이지만 전기적으로 이어진 통전 경로가 아닌 구간.
 // 이미지 선 검출만으로는 접점/교차/비접속을 구분할 수 없으므로 도면별 예외를 명시한다.
-const OVERLAY_NEVER_ENERGIZE = {
-  // 2번: SS의 A(자동) 회로와 M(수동) 회로 사이 수평 구간은 서로 통전 경로가 아님.
-  // 검출된 y=496, x=853~1163 선을 출력 상태만으로 켜면 A↔M 사이가 잘못 빨갛게 표시된다.
-  '2': new Set(['d-h-3']),
-};
+const OVERLAY_NEVER_ENERGIZE = {};
 
+function detectedLoadAny(dnum,cfg){
+  const labels = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
+  return labels.some(label=>overlayTerminalOn(dlrResolve(dnum,label)));
+}
 function detectedFlowState(dnum,cfg,state){
   if(state==='controlPower') return true;
+  if(state==='returnActive') return detectedLoadAny(dnum,cfg);
   if(state==='eocrn') return !ui.eocr;
   if(state.startsWith('label:')){
     const label=state.slice(6); return overlayTerminalOn(dlrResolve(dnum,label));
@@ -480,6 +490,11 @@ function detectedFlowState(dnum,cfg,state){
   if(state.startsWith('labels:')){
     const labels=state.slice(7).split(',').filter(Boolean);
     return labels.some(label=>overlayTerminalOn(dlrResolve(dnum,label)));
+  }
+  if(state.startsWith('ends:')){
+    const labels=state.slice(5).split(',').filter(Boolean);
+    if(labels.length<2) return false;
+    return labels.every(label=>overlayTerminalOn(dlrResolve(dnum,label)));
   }
   return false;
 }
