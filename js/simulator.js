@@ -463,6 +463,14 @@ function buildDetectedWireFlow(dnum,cfg){
   });
   return segs;
 }
+// 원본 도면상 선이 겹쳐 보이지만 전기적으로 이어진 통전 경로가 아닌 구간.
+// 이미지 선 검출만으로는 접점/교차/비접속을 구분할 수 없으므로 도면별 예외를 명시한다.
+const OVERLAY_NEVER_ENERGIZE = {
+  // 2번: SS의 A(자동) 회로와 M(수동) 회로 사이 수평 구간은 서로 통전 경로가 아님.
+  // 검출된 y=496, x=853~1163 선을 출력 상태만으로 켜면 A↔M 사이가 잘못 빨갛게 표시된다.
+  '2': new Set(['d-h-3']),
+};
+
 function detectedFlowState(dnum,cfg,state){
   if(state==='controlPower') return true;
   if(state==='eocrn') return !ui.eocr;
@@ -580,8 +588,10 @@ function updateDiagramOverlay(){
   }
 
   // 도면 2~18: 검출된 실제 배선 조각별 상태 반영
-  Object.values(overlayCustomEls).forEach(item=>{
-    item.el.classList.toggle('on', detectedFlowState(dnum,cfg,item.state));
+  Object.entries(overlayCustomEls).forEach(([id,item])=>{
+    // 도면상 비접속/분리 회로는 출력이 켜져 있어도 통전선으로 표시하지 않는다.
+    const blocked = OVERLAY_NEVER_ENERGIZE[String(dnum)]?.has(id);
+    item.el.classList.toggle('on', !blocked && detectedFlowState(dnum,cfg,item.state));
   });
   const labels = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
   labels.forEach(label=>{
