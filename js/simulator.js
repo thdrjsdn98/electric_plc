@@ -259,21 +259,21 @@ const LEFT_POWER_REAL_FLOW = [
 
   // MC2 역회전 입력 교차배선 -> 실제 MC2 주접점 상단(원본 검은선 실측)
   // PE(267)는 상선이 아니므로 MC2 3상에서 제외한다.
-  {id:'lp-mc2-feed1', state:'sourcePower', points:[[102,546],[349,546],[349,568],[349,608]]},
-  {id:'lp-mc2-feed2', state:'sourcePower', points:[[145,526],[390,526],[390,568],[390,608]]},
-  {id:'lp-mc2-feed3', state:'sourcePower', points:[[186,506],[431,506],[431,568],[431,608]]},
+  {id:'lp-mc2-feed1', state:'sourcePower', points:[[102,547],[348,547],[348,568],[348,608]]},
+  {id:'lp-mc2-feed2', state:'sourcePower', points:[[145,526],[389,526],[389,568],[389,608]]},
+  {id:'lp-mc2-feed3', state:'sourcePower', points:[[186,506],[430,506],[430,568],[430,608]]},
 
   // MC2 역회전 가지 -> TB3 -> M2 (MC2 실제 접점 x좌표)
-  {id:'lp-mc2-l1', state:'mc2Power', points:[[349,608],[349,738],[349,774]]},
-  {id:'lp-mc2-l2', state:'mc2Power', points:[[390,608],[390,738],[390,774]]},
-  {id:'lp-mc2-l3', state:'mc2Power', points:[[431,608],[431,738],[431,774]]},
+  {id:'lp-mc2-l1', state:'mc2Power', points:[[348,608],[348,738],[348,774]]},
+  {id:'lp-mc2-l2', state:'mc2Power', points:[[389,608],[389,738],[389,774]]},
+  {id:'lp-mc2-l3', state:'mc2Power', points:[[430,608],[430,738],[430,774]]},
 ];
 
 // 보호도체(PE)는 통전 애니메이션과 분리해 항상 녹색으로 표시한다.
 // TB1 PE -> TB2/M1 PE/접지, TB1 PE -> TB3/M2 PE/접지의 원본 검은선 경로.
 const LEFT_POWER_GROUND_FLOW = [
   {id:'pe-m1', points:[[267,255],[267,480],[267,738],[267,806]]},
-  {id:'pe-m2-bridge', points:[[267,480],[470,480],[470,738],[470,806]]},
+  {id:'pe-m2-bridge', points:[[267,480],[471,480],[471,738],[471,806]]},
 ];
 
 function leftPowerStates(){
@@ -417,7 +417,7 @@ const DIAGRAM_REAL_FLOW = {
     RL: [[1489,718],[1489,292]],
     GL: [[1570,718],[1570,292]],
   }},
-  "5": { topY:312, bottomY:822, paths: {
+  "5": { topY:292, bottomY:822, paths: {
     EOCR: [[593,718],[593,312]],
     YL: [[674,718],[673,718],[673,538],[594,538],[594,312]],
     BZ: [[756,718],[754,718],[754,660],[673,660],[673,538],[594,538],[594,312]],
@@ -791,18 +791,18 @@ function buildOverlayFor(dnum, cfg){
     return;
   }
 
-  // 도면 2~18: 기준 파일(panel-beta-modular-fixed-1)의 실제 보조회로 경로를 사용
-  const flow = DIAGRAM_REAL_FLOW[String(dnum)];
-  if(flow){
+  // v0.3.18 — 도면 2~18은 원본 JPG에서 검출한 '실제 검은 직선'만 사용한다.
+  // 추정 꺾임 경로(DIAGRAM_REAL_FLOW)를 직접 그리면 5/6/18번처럼 검은선이 없는 곳을
+  // 빨간선이 가로지르는 문제가 생길 수 있으므로, 표시 좌표는 DETECTED_WIRE_GEOMETRY로 제한한다.
+  const detectedFlow = buildDetectedWireFlow(dnum, cfg);
+  if(detectedFlow.length){
+    detectedFlow.forEach(seg=>{
+      overlayCustomEls[seg.id] = { el:makePath(seg.points,'wire'), state:seg.state };
+    });
     const labels = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
-    overlayCustomEls['g-top-bus']={el:makePath([[cfg.leftX,flow.topY],[cfg.rightX,flow.topY]],'wire'),state:'eocrn'};
-    overlayCustomEls['g-bottom-bus']={el:makePath([[cfg.leftX,flow.bottomY],[cfg.rightX,flow.bottomY]],'wire'),state:'controlpower'};
     labels.forEach(label=>{
-      const pts=flow.paths[label]; if(!pts) return;
-      const key=label.toLowerCase(), coilX=pts[0][0];
-      overlayCustomEls[`g-${key}-feed`]={el:makePath(pts,'wire'),state:key};
-      overlayCustomEls[`g-${key}-ret`]={el:makeLine(coilX,cfg.coilY+30,coilX,flow.bottomY,'wire'),state:key};
-      overlayCoilEls[label]=makeCircle(coilX,cfg.coilY,30,'coil-ring');
+      const x=cfg.x[label];
+      if(x!=null) overlayCoilEls[label]=makeCircle(x,cfg.coilY,30,'coil-ring');
     });
     (cfg.frContacts||[]).forEach(f=>overlayFrEls[f.label]=makeLine(f.x,f.y1,f.x,f.y2,'fr-contact'));
   }
@@ -849,10 +849,9 @@ function updateDiagramOverlay(){
     return;
   }
 
-  // 도면 2~18: 기준 파일의 실제 경로별 상태 반영
-  if(DIAGRAM_REAL_FLOW[String(dnum)]){
-    const st=generic19FlowStates(dnum,cfg);
-    Object.values(overlayCustomEls).forEach(item=>item.el.classList.toggle('on',!!st[item.state]));
+  // v0.3.18 도면 2~18: 원본 검은선 검출 세그먼트별 상태 반영
+  if(DETECTED_WIRE_GEOMETRY[String(dnum)]){
+    Object.values(overlayCustomEls).forEach(item=>item.el.classList.toggle('on', detectedFlowState(dnum,cfg,item.state)));
     const labels=DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
     labels.forEach(label=>overlayCoilEls[label]?.classList.toggle('on',!!overlayTerminalOn(dlrResolve(dnum,label))));
     (cfg.frContacts||[]).forEach(f=>overlayFrEls[f.label]?.classList.toggle('on',!!plc.get(f.addr)));
