@@ -233,7 +233,7 @@ let overlayWireEls = {}, overlayCoilEls = {}, overlayFrEls = {}, overlayCustomEl
 // - MC1/MC2 여자 상태에 맞춰 좌측 주회로 전류 흐름 표시
 // ============================================================
 const LEFT_POWER_REAL_FLOW = [
-  // v0.3.17 전체 도면 오버레이 재보정 (v0.3.16 기준 유지): 좌측 주회로/FUSE 꺾임/코일 중심을 검은 원본선에 정렬
+  // v0.3.20: TB1 실제 단자 중심 L1=145/L2=186/L3=227/PE=267 기준. TB1 글자(x≈102)는 배선 좌표로 사용하지 않음
   // TB1 -> MCCB -> EOCR 입력부 : MCCB는 항상 ON으로 가정하므로 상시 통전
   {id:'lp-l1-src', state:'sourcePower', points:[[145,255],[145,307],[145,337],[145,426]]},
   {id:'lp-l2-src', state:'sourcePower', points:[[186,255],[186,307],[186,337],[186,426]]},
@@ -418,17 +418,17 @@ const DIAGRAM_REAL_FLOW = {
     GL: [[1570,718],[1570,292]],
   }},
   "5": { topY:292, bottomY:822, paths: {
-    EOCR: [[593,718],[593,312]],
-    YL: [[674,718],[673,718],[673,538],[594,538],[594,312]],
-    BZ: [[756,718],[754,718],[754,660],[673,660],[673,538],[594,538],[594,312]],
-    FLS: [[837,718],[837,312]],
-    X: [[1000,718],[1001,718],[1001,578],[1080,578],[1080,312]],
-    T: [[1081,718],[1080,718],[1080,701],[1001,701],[1001,578],[1080,578],[1080,312]],
-    FR: [[1163,718],[1161,718],[1161,578],[1082,578],[1082,312]],
-    MC1: [[1244,718],[1243,718],[1243,578],[1082,578],[1082,312]],
-    MC2: [[1326,718],[1324,718],[1324,578],[1082,578],[1082,312]],
-    RL: [[1489,718],[1489,312]],
-    GL: [[1570,718],[1570,312]],
+    EOCR: [[593,718],[593,292]],
+    YL: [[674,718],[673,718],[673,538],[594,538],[594,292]],
+    BZ: [[756,718],[754,718],[754,660],[673,660],[673,538],[594,538],[594,292]],
+    FLS: [[837,718],[837,292]],
+    X: [[1000,718],[1001,718],[1001,578],[1080,578],[1080,292]],
+    T: [[1081,718],[1080,718],[1080,701],[1001,701],[1001,578],[1080,578],[1080,292]],
+    FR: [[1163,718],[1161,718],[1161,578],[1082,578],[1082,292]],
+    MC1: [[1244,718],[1243,718],[1243,578],[1082,578],[1082,292]],
+    MC2: [[1326,718],[1324,718],[1324,578],[1082,578],[1082,292]],
+    RL: [[1489,718],[1489,292]],
+    GL: [[1570,718],[1570,292]],
   }},
   "6": { topY:292, bottomY:822, paths: {
     EOCR: [[593,718],[593,292]],
@@ -796,14 +796,26 @@ function buildOverlayFor(dnum, cfg){
     return;
   }
 
-  // v0.3.18 — 도면 2~18은 원본 JPG에서 검출한 '실제 검은 직선'만 사용한다.
-  // 추정 꺾임 경로(DIAGRAM_REAL_FLOW)를 직접 그리면 5/6/18번처럼 검은선이 없는 곳을
-  // 빨간선이 가로지르는 문제가 생길 수 있으므로, 표시 좌표는 DETECTED_WIRE_GEOMETRY로 제한한다.
-  const detectedFlow = buildDetectedWireFlow(dnum, cfg);
-  if(detectedFlow.length){
-    detectedFlow.forEach(seg=>{
-      overlayCustomEls[seg.id] = { el:makePath(seg.points,'wire'), state:seg.state };
+  // v0.3.20 — 도면 2~18은 도면별 실제 연결 경로(DIAGRAM_REAL_FLOW)를 사용한다.
+  // 이미지 자동 선 검출은 문자(TB1 등)나 접점 기호를 배선으로 오인해 엉뚱한 빨간선을 만들 수 있어
+  // 통전 오버레이에는 더 이상 사용하지 않는다. 좌측 주회로는 LEFT_POWER_REAL_FLOW가 전담한다.
+  const real = DIAGRAM_REAL_FLOW[String(dnum)];
+  if(real){
+    Object.entries(real.paths).forEach(([label,points])=>{
+      overlayCustomEls[`real-${label}`] = { el:makePath(points,'wire'), state:`label:${label}` };
+      const x=cfg.x[label];
+      if(x!=null){
+        overlayCustomEls[`real-${label}-ret`] = {
+          el:makePath([[x,cfg.coilY+20],[x,real.bottomY]],'wire'),
+          state:`label:${label}`
+        };
+      }
     });
+    // 하단 공통선은 실제로 여자된 부하가 있을 때만 표시한다.
+    overlayCustomEls['real-return-bus'] = {
+      el:makePath([[511,real.bottomY],[cfg.rightX,real.bottomY]],'wire'),
+      state:'returnActive'
+    };
     const labels = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
     labels.forEach(label=>{
       const x=cfg.x[label];
@@ -854,8 +866,8 @@ function updateDiagramOverlay(){
     return;
   }
 
-  // v0.3.18 도면 2~18: 원본 검은선 검출 세그먼트별 상태 반영
-  if(DETECTED_WIRE_GEOMETRY[String(dnum)]){
+  // v0.3.20 도면 2~18: 실제 도면별 경로에 각 출력/타이머 상태를 반영
+  if(DIAGRAM_REAL_FLOW[String(dnum)]){
     Object.values(overlayCustomEls).forEach(item=>item.el.classList.toggle('on', detectedFlowState(dnum,cfg,item.state)));
     const labels=DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
     labels.forEach(label=>overlayCoilEls[label]?.classList.toggle('on',!!overlayTerminalOn(dlrResolve(dnum,label))));
