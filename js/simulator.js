@@ -211,7 +211,7 @@ const OVERLAY_CONFIGS = {
     x: { EOCR:593, YL:674, X1:796, X2:878, MC1:959, T1:1041, RL:1122, MC2:1203, WL:1285, T2:1366, GL:1448 },
   },
   "18": {
-    railY: 292, coilY: 761, leftX: 593, rightX: 1448,
+    railY: 292, coilY: 761, leftX: 593, rightX: 1529,
     x: { EOCR:593, YL:674, X1:796, X2:878, MC1:959, T1:1041, RL:1122, MC2:1203, T2:1285, GL:1366, WL:1448 },
   },
 };
@@ -233,7 +233,7 @@ let overlayWireEls = {}, overlayCoilEls = {}, overlayFrEls = {}, overlayCustomEl
 // - MC1/MC2 여자 상태에 맞춰 좌측 주회로 전류 흐름 표시
 // ============================================================
 const LEFT_POWER_REAL_FLOW = [
-  // v0.3.16 원본 JPG 실측 재보정: 좌측 주회로/FUSE 꺾임/코일 중심을 검은 원본선에 정렬
+  // v0.3.17 전체 도면 오버레이 재보정 (v0.3.16 기준 유지): 좌측 주회로/FUSE 꺾임/코일 중심을 검은 원본선에 정렬
   // TB1 -> MCCB -> EOCR 입력부 : MCCB는 항상 ON으로 가정하므로 상시 통전
   {id:'lp-l1-src', state:'sourcePower', points:[[102,255],[102,307],[102,337],[102,426]]},
   {id:'lp-l2-src', state:'sourcePower', points:[[145,255],[145,307],[145,337],[145,426]]},
@@ -300,7 +300,10 @@ const DIAGRAM1_REAL_FLOW = [
   {id:'return-bus',     state:'controlPower', points:[[511,822],[1570,822]]},
 
   // EOCR 트립 표시/FR 점멸 계통 (원본 좌측 가지)
-  {id:'trip-feed',      state:'tripAny',      points:[[593,292],[593,490],[674,490],[674,610]]},
+  // EOCR 전원 코일: 원본처럼 상단 전원선에서 EOCR 원까지 곧바로 내려옴
+  {id:'eocr-coil-feed', state:'controlPower', points:[[593,292],[593,718]]},
+  {id:'eocr-coil-ret',  state:'controlPower', points:[[593,780],[593,822]]},
+  {id:'trip-feed',      state:'tripAny',      points:[[674,538],[674,610]]},
   {id:'fr-coil-feed',   state:'fr',           points:[[674,610],[674,720]]},
   {id:'fr-return',      state:'fr',           points:[[674,780],[674,820]]},
   {id:'yl-feed',        state:'yl',           points:[[674,610],[755,610],[755,720]]},
@@ -309,7 +312,6 @@ const DIAGRAM1_REAL_FLOW = [
   {id:'bz-return',      state:'bz',           points:[[837,780],[837,820]]},
 
   // FLS 입력 표시 가지
-  {id:'eocr-mid-branch', state:'eocrNormal', points:[[593,490],[674,490]]},
   {id:'fls-ind-feed',   state:'fls',          points:[[1081,490],[919,490],[919,720]]},
   {id:'fls-ind-return', state:'fls',          points:[[919,780],[919,820]]},
 
@@ -415,18 +417,18 @@ const DIAGRAM_REAL_FLOW = {
     RL: [[1489,718],[1489,292]],
     GL: [[1570,718],[1570,292]],
   }},
-  "5": { topY:251, bottomY:822, paths: {
-    EOCR: [[593,718],[593,251]],
-    YL: [[674,718],[673,718],[673,538],[594,538],[594,251]],
-    BZ: [[756,718],[754,718],[754,660],[673,660],[673,538],[594,538],[594,251]],
-    FLS: [[837,718],[837,251]],
-    X: [[1000,718],[1001,718],[1001,578],[1080,578],[1080,251]],
-    T: [[1081,718],[1080,718],[1080,701],[1001,701],[1001,578],[1080,578],[1080,251]],
-    FR: [[1163,718],[1161,718],[1161,578],[1082,578],[1082,251]],
-    MC1: [[1244,718],[1243,718],[1243,578],[1082,578],[1082,251]],
-    MC2: [[1326,718],[1324,718],[1324,578],[1082,578],[1082,251]],
-    RL: [[1489,718],[1489,251]],
-    GL: [[1570,718],[1570,251]],
+  "5": { topY:312, bottomY:822, paths: {
+    EOCR: [[593,718],[593,312]],
+    YL: [[674,718],[673,718],[673,538],[594,538],[594,312]],
+    BZ: [[756,718],[754,718],[754,660],[673,660],[673,538],[594,538],[594,312]],
+    FLS: [[837,718],[837,312]],
+    X: [[1000,718],[1001,718],[1001,578],[1080,578],[1080,312]],
+    T: [[1081,718],[1080,718],[1080,701],[1001,701],[1001,578],[1080,578],[1080,312]],
+    FR: [[1163,718],[1161,718],[1161,578],[1082,578],[1082,312]],
+    MC1: [[1244,718],[1243,718],[1243,578],[1082,578],[1082,312]],
+    MC2: [[1326,718],[1324,718],[1324,578],[1082,578],[1082,312]],
+    RL: [[1489,718],[1489,312]],
+    GL: [[1570,718],[1570,312]],
   }},
   "6": { topY:292, bottomY:822, paths: {
     EOCR: [[593,718],[593,292]],
@@ -722,6 +724,7 @@ function detectedFlowState(dnum,cfg,state){
   if(state==='controlPower') return true;
   if(state==='returnActive') return detectedLoadAny(dnum,cfg);
   if(state==='eocrn') return !ui.eocr;
+  if(state==='controlpower') return true;
   if(state.startsWith('label:')){
     const label=state.slice(6); return overlayTerminalOn(dlrResolve(dnum,label));
   }
@@ -793,7 +796,7 @@ function buildOverlayFor(dnum, cfg){
   if(flow){
     const labels = DIAGRAM_ROW_LABELS[String(dnum)] || Object.keys(cfg.x);
     overlayCustomEls['g-top-bus']={el:makePath([[cfg.leftX,flow.topY],[cfg.rightX,flow.topY]],'wire'),state:'eocrn'};
-    overlayCustomEls['g-bottom-bus']={el:makePath([[cfg.leftX,flow.bottomY],[cfg.rightX,flow.bottomY]],'wire'),state:'runbus'};
+    overlayCustomEls['g-bottom-bus']={el:makePath([[cfg.leftX,flow.bottomY],[cfg.rightX,flow.bottomY]],'wire'),state:'controlpower'};
     labels.forEach(label=>{
       const pts=flow.paths[label]; if(!pts) return;
       const key=label.toLowerCase(), coilX=pts[0][0];
